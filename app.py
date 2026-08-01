@@ -218,25 +218,20 @@ def _reset_analysis() -> None:
     st.session_state.analysis_started = False
 
 
-def _get_streamlit_secrets() -> dict | None:
-    try:
-        return dict(st.secrets)
-    except Exception:
-        return None
-
-
 @st.cache_data(ttl=300, show_spinner=False)
-def _load_spravochnik_cached(_streamlit_secrets: dict | None) -> dict:
-    return load_spravochnik(streamlit_secrets=_streamlit_secrets)
+def _load_spravochnik_cached() -> dict:
+    """Кэширует загрузку справочника; secrets читаются внутри функции."""
+    return load_spravochnik(streamlit_secrets=st.secrets)
 
 
 try:
-    spravochnik = _load_spravochnik_cached(_get_streamlit_secrets())
+    spravochnik = _load_spravochnik_cached()
 except FileNotFoundError as exc:
     st.warning(str(exc))
     spravochnik = None
 except Exception as exc:
-    st.error(f"Ошибка чтения справочника: {exc}")
+    error_text = str(exc).strip() or f"{type(exc).__name__}: {exc!r}"
+    st.error(f"Ошибка чтения справочника: {error_text}")
     spravochnik = None
 
 purchase_result = None

@@ -265,7 +265,10 @@ def load_spravochnik(
     )
 
     if not prefer_excel and settings["sheets_id"]:
+        from spravochnik_config import validate_spravochnik_settings
         from google_sheets import load_spravochnik_from_sheets
+
+        validate_spravochnik_settings(settings)
 
         return load_spravochnik_from_sheets(
             sheets_id=settings["sheets_id"],
