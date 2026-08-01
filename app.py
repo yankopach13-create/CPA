@@ -42,14 +42,18 @@ st.markdown(
     }
     div[data-testid="stVerticalBlock"]:has(#top-controls-row)
     > div[data-testid="stHorizontalBlock"] .control-panel-title {
-        font-size: 0.95rem;
-        font-weight: 800;
+        font-size: 1.1rem;
+        font-weight: 900;
         color: #111827;
         line-height: 1.25;
         min-height: 2.5rem;
         margin: 0 0 0.4rem 0;
         display: flex;
         align-items: flex-end;
+    }
+    div[data-testid="stVerticalBlock"]:has(#top-controls-row)
+    > div[data-testid="stHorizontalBlock"] .control-panel-title strong {
+        font-weight: 900;
     }
     div[data-testid="stVerticalBlock"]:has(#top-controls-row)
     > div[data-testid="stHorizontalBlock"]
@@ -195,7 +199,7 @@ st.markdown(
         margin: 1.25rem 0 0.75rem 0;
     }
     .categories-section-title {
-        font-size: 1.5rem;
+        font-size: 2rem;
         font-weight: 800;
         color: #111827;
         line-height: 1.3;
@@ -232,7 +236,7 @@ upload_col, week_col = st.columns([2, 1], gap="medium")
 
 with upload_col:
     st.markdown(
-        '<p class="control-panel-title">Данные о покупках клиентов за 13 недель</p>',
+        '<p class="control-panel-title"><strong>Данные о покупках клиентов за 13 недель</strong></p>',
         unsafe_allow_html=True,
     )
     with st.container(border=True):
@@ -266,7 +270,7 @@ if uploaded_purchases is not None:
 
 with week_col:
     st.markdown(
-        '<p class="control-panel-title">Актуальная неделя</p>',
+        '<p class="control-panel-title"><strong>Актуальная неделя</strong></p>',
         unsafe_allow_html=True,
     )
     with st.container(border=True):
