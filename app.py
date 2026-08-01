@@ -17,6 +17,7 @@ from spravochnik_config import (
     DEFAULT_SHEETS_ID,
     get_google_credentials_from_secrets,
     get_sheets_id_from_env_or_secrets,
+    has_google_secrets_config,
 )
 from processor import (
     get_cycle_number,
@@ -233,34 +234,35 @@ def _reset_analysis() -> None:
     st.session_state.analysis_started = False
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_spravochnik_cached(
-    sheets_id: str | None,
-    _credentials_info: dict | None,
-) -> dict:
-    """Кэширует загрузку справочника. Secrets читаются снаружи — не внутри cache."""
-    return load_spravochnik(
-        sheets_id=sheets_id,
-        credentials_info=_credentials_info,
-    )
-
-
-def _read_spravochnik_auth() -> tuple[str | None, dict | None]:
-    try:
-        return get_google_credentials_from_secrets(st.secrets)
-    except Exception:
-        return None, None
+def _load_spravochnik_for_app() -> dict:
+    """Загружает справочник: Google Sheets на Cloud или локальный Excel."""
+    if has_google_secrets_config(st.secrets):
+        sheets_id, credentials_info = get_google_credentials_from_secrets(st.secrets)
+        sheets_id = sheets_id or DEFAULT_SHEETS_ID
+        return load_spravochnik(
+            sheets_id=sheets_id,
+            credentials_info=credentials_info,
+        )
+    return load_spravochnik(streamlit_secrets=st.secrets)
 
 
 try:
-    _sheets_id, _credentials_info = _read_spravochnik_auth()
-    spravochnik = _load_spravochnik_cached(_sheets_id, _credentials_info)
+    spravochnik = _load_spravochnik_for_app()
 except FileNotFoundError as exc:
     st.warning(str(exc))
     spravochnik = None
 except Exception as exc:
-    error_text = str(exc).strip() or f"{type(exc).__name__}: {exc!r}"
+    error_text = str(exc).strip() or f"{type(exc).__name__} (без текста)"
     st.error(f"Ошибка чтения справочника: {error_text}")
+    with st.expander("Что проверить"):
+        st.markdown(
+            """
+            1. **Google Cloud** → APIs & Services → включён **Google Sheets API** для проекта `b2b-rnp`.
+            2. **Google Sheets** → Поделиться → добавлен `cpa-951@b2b-rnp.iam.gserviceaccount.com` (Читатель/Редактор).
+            3. **Streamlit Cloud Secrets** → секции `[google]` и `[google.service_account]` заполнены.
+            4. После изменений — **Reboot app** на Streamlit Cloud.
+            """
+        )
     spravochnik = None
 
 purchase_result = None

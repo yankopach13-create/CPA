@@ -8,10 +8,75 @@ PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CREDENTIALS_PATH = PROJECT_DIR / "google_credentials.json"
 DEFAULT_SHEETS_ID = "1B5PMa5qlzhf6ssLJ7iansVFPfLjdRlFLdsdyj2aXako"
 
+SERVICE_ACCOUNT_FIELDS = (
+    "type",
+    "project_id",
+    "private_key_id",
+    "private_key",
+    "client_email",
+    "client_id",
+    "auth_uri",
+    "token_uri",
+    "auth_provider_x509_cert_url",
+    "client_x509_cert_url",
+    "universe_domain",
+)
+
 
 def build_google_sheets_url(sheets_id: str) -> str:
     """Формирует ссылку на Google таблицу справочника."""
     return f"https://docs.google.com/spreadsheets/d/{sheets_id.strip()}/edit"
+
+
+def _to_plain_dict(section: Any) -> dict[str, Any]:
+    """Преобразует dict или Streamlit Secrets в обычный словарь."""
+    if section is None:
+        return {}
+    if isinstance(section, dict):
+        return {str(key): value for key, value in section.items()}
+    if hasattr(section, "keys"):
+        return {str(key): section[key] for key in section.keys()}
+    return {}
+
+
+def _normalize_service_account_info(service_account: Any) -> dict[str, str]:
+    """Преобразует service_account из secrets в обычный dict со строковыми полями."""
+    raw = _to_plain_dict(service_account)
+    if not raw:
+        raise ValueError("Секция [google.service_account] в Secrets пуста.")
+
+    normalized: dict[str, str] = {}
+    for field in SERVICE_ACCOUNT_FIELDS:
+        value = raw.get(field)
+        if value is not None and str(value).strip():
+            normalized[field] = str(value)
+
+    required = ("type", "project_id", "private_key", "client_email", "token_uri")
+    missing = [field for field in required if field not in normalized]
+    if missing:
+        raise ValueError(
+            "В [google.service_account] не хватает полей: "
+            + ", ".join(missing)
+        )
+
+    normalized["private_key"] = normalized["private_key"].replace("\\n", "\n")
+    return normalized
+
+
+def _read_google_section(streamlit_secrets: Any) -> dict[str, Any]:
+    """Читает секцию [google] из st.secrets."""
+    if streamlit_secrets is None:
+        return {}
+
+    if hasattr(streamlit_secrets, "get"):
+        google_section = streamlit_secrets.get("google")
+        if google_section is not None:
+            return _to_plain_dict(google_section)
+
+    try:
+        return _to_plain_dict(streamlit_secrets["google"])
+    except (KeyError, TypeError, AttributeError):
+        return {}
 
 
 def get_sheets_id_from_env_or_secrets(streamlit_secrets: Any | None = None) -> str | None:
@@ -20,49 +85,32 @@ def get_sheets_id_from_env_or_secrets(streamlit_secrets: Any | None = None) -> s
     if streamlit_secrets is not None:
         google_cfg = _read_google_section(streamlit_secrets)
         if google_cfg.get("sheets_id"):
-            sheets_id = google_cfg.get("sheets_id")
+            sheets_id = str(google_cfg.get("sheets_id")).strip()
     return sheets_id
 
 
-def _to_plain_dict(section: Any) -> dict[str, Any]:
-    """Преобразует dict или Streamlit Secrets в обычный словарь."""
-    if section is None:
-        return {}
-    if isinstance(section, dict):
-        return dict(section)
-    if hasattr(section, "keys"):
-        return {key: section[key] for key in section.keys()}
-    return {}
-
-
-def _read_google_section(streamlit_secrets: Any) -> dict[str, Any]:
-    """Читает секцию [google] из st.secrets."""
-    if streamlit_secrets is None:
-        return {}
-
-    try:
-        return _to_plain_dict(streamlit_secrets["google"])
-    except (KeyError, TypeError, AttributeError):
-        if hasattr(streamlit_secrets, "get"):
-            return _to_plain_dict(streamlit_secrets.get("google"))
-        return {}
-
-
-def get_google_credentials_from_secrets(streamlit_secrets: Any) -> tuple[str | None, dict[str, Any] | None]:
-    """Извлекает sheets_id и service_account из st.secrets для загрузки справочника."""
+def get_google_credentials_from_secrets(
+    streamlit_secrets: Any,
+) -> tuple[str | None, dict[str, str] | None]:
+    """Извлекает sheets_id и service_account из st.secrets."""
     google_cfg = _read_google_section(streamlit_secrets)
     if not google_cfg:
         return None, None
 
     sheets_id = google_cfg.get("sheets_id")
+    sheets_id = str(sheets_id).strip() if sheets_id else None
+
     credentials_info = None
     if "service_account" in google_cfg:
-        credentials_info = _to_plain_dict(google_cfg["service_account"])
-        private_key = credentials_info.get("private_key")
-        if private_key is not None:
-            credentials_info["private_key"] = str(private_key)
+        credentials_info = _normalize_service_account_info(google_cfg["service_account"])
 
     return sheets_id, credentials_info
+
+
+def has_google_secrets_config(streamlit_secrets: Any) -> bool:
+    """Проверяет, задан ли справочник через Google Secrets."""
+    google_cfg = _read_google_section(streamlit_secrets)
+    return bool(google_cfg.get("sheets_id") or google_cfg.get("service_account"))
 
 
 def resolve_spravochnik_settings(
@@ -87,17 +135,19 @@ def resolve_spravochnik_settings(
         if not resolved_credentials_path:
             resolved_credentials_path = google_cfg.get("credentials_path")
         if resolved_credentials_info is None and "service_account" in google_cfg:
-            resolved_credentials_info = _to_plain_dict(google_cfg["service_account"])
+            resolved_credentials_info = _normalize_service_account_info(
+                google_cfg["service_account"]
+            )
 
     if resolved_credentials_info:
         resolved_credentials_info = dict(resolved_credentials_info)
-        private_key = resolved_credentials_info.get("private_key")
-        if private_key is not None:
-            resolved_credentials_info["private_key"] = str(private_key)
 
     if not resolved_credentials_path and resolved_credentials_info is None:
         if DEFAULT_CREDENTIALS_PATH.exists():
             resolved_credentials_path = str(DEFAULT_CREDENTIALS_PATH)
+
+    if resolved_sheets_id is not None:
+        resolved_sheets_id = str(resolved_sheets_id).strip()
 
     return {
         "sheets_id": resolved_sheets_id,

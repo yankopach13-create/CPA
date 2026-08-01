@@ -24,16 +24,19 @@ def _authorize_gspread(
     credentials_info: dict[str, Any] | None = None,
 ) -> gspread.Client:
     """Авторизует клиент gspread через сервисный аккаунт."""
-    if credentials_info is not None:
-        creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
-    elif credentials_path is not None:
-        creds = Credentials.from_service_account_file(credentials_path, scopes=SCOPES)
-    else:
-        raise ValueError(
-            "Не указаны учётные данные Google. "
-            "Задайте GOOGLE_APPLICATION_CREDENTIALS или secrets.toml."
-        )
-    return gspread.authorize(creds)
+    try:
+        if credentials_info is not None:
+            creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
+        elif credentials_path is not None:
+            creds = Credentials.from_service_account_file(credentials_path, scopes=SCOPES)
+        else:
+            raise ValueError(
+                "Не указаны учётные данные Google. "
+                "Добавьте в Secrets секцию [google.service_account]."
+            )
+        return gspread.authorize(creds)
+    except (ValueError, OSError) as exc:
+        raise ValueError(f"Ошибка учётных данных Google: {exc}") from exc
 
 
 def _worksheet_to_dataframe_multilevel(worksheet: gspread.Worksheet) -> pd.DataFrame:
@@ -96,14 +99,24 @@ def load_spravochnik_from_sheets(
             f"Таблица Google Sheets не найдена. Проверьте sheets_id: {sheets_id}"
         ) from None
     except APIError as exc:
-        if exc.response.status_code == 403:
-            email_hint = service_email or "сервисного аккаунта"
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        if status_code == 403:
+            email_hint = service_email or "cpa-951@b2b-rnp.iam.gserviceaccount.com"
             raise PermissionError(
-                f"Нет доступа к Google таблице. "
-                f"Откройте таблицу в Google Sheets и добавьте {email_hint} "
+                f"Нет доступа к Google таблице (403). "
+                f"1) В Google Cloud включите Google Sheets API для проекта b2b-rnp. "
+                f"2) В Google Sheets откройте «Поделиться» и добавьте {email_hint} "
                 f"с правом «Читатель» или «Редактор»."
             ) from exc
-        raise ValueError(f"Ошибка Google Sheets API: {exc}") from exc
+        raise ValueError(f"Ошибка Google Sheets API ({status_code}): {exc}") from exc
+    except PermissionError as exc:
+        if str(exc).strip():
+            raise
+        email_hint = service_email or "cpa-951@b2b-rnp.iam.gserviceaccount.com"
+        raise PermissionError(
+            f"Нет доступа к Google таблице. "
+            f"Добавьте {email_hint} в доступ к таблице и включите Google Sheets API."
+        ) from exc
 
     sheet_names = [worksheet.title for worksheet in spreadsheet.worksheets()]
 
