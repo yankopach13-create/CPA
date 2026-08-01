@@ -1,5 +1,7 @@
 """Streamlit-приложение для анализа клиентов в продукте."""
 
+import html
+
 import streamlit as st
 
 from metrics_calculator import (
@@ -39,9 +41,15 @@ UPLOAD_HINT_TEXT = (
 )
 
 
-@st.dialog("Что нужно загрузить")
-def _show_upload_hint_dialog() -> None:
-    st.markdown(UPLOAD_HINT_TEXT)
+def _upload_hint_html() -> str:
+    hint_text = html.escape(UPLOAD_HINT_TEXT).replace("\n", "<br>")
+    return (
+        f'<div class="upload-hint-wrap" id="upload-hint-marker">'
+        f'<span class="upload-hint-label">ℹ️ Подсказка по загрузке файла</span>'
+        f'<span class="upload-hint-tooltip">{hint_text}</span>'
+        "</div>"
+    )
+
 
 st.title("🛒 👤 Анализ клиентов в продукте")
 
@@ -53,9 +61,7 @@ st.markdown(
     "</a></p>",
     unsafe_allow_html=True,
 )
-st.markdown('<span id="upload-hint-marker" style="display:none;"></span>', unsafe_allow_html=True)
-if st.button("ℹ️  Подсказка по загрузке файла", key="upload_hint_button"):
-    _show_upload_hint_dialog()
+st.markdown(_upload_hint_html(), unsafe_allow_html=True)
 
 st.markdown(
     """
@@ -75,10 +81,56 @@ st.markdown(
         font-weight: 900;
         color: #111827;
         line-height: 1.25;
-        min-height: 2.5rem;
-        margin: 0 0 0.4rem 0;
+        min-height: 2rem;
+        margin: 0 0 0.25rem 0;
         display: flex;
         align-items: flex-end;
+    }
+    .upload-hint-wrap {
+        position: relative;
+        display: inline-block;
+        margin: 0 0 0.35rem 0;
+    }
+    .upload-hint-label {
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: #4b5563;
+        cursor: help;
+        border-bottom: 1px dotted #9ca3af;
+        line-height: 1.3;
+    }
+    .upload-hint-tooltip {
+        visibility: hidden;
+        opacity: 0;
+        position: absolute;
+        left: 0;
+        top: calc(100% + 4px);
+        z-index: 1000;
+        min-width: 260px;
+        max-width: 420px;
+        padding: 0.6rem 0.8rem;
+        background: #1f2937;
+        color: #f9fafb;
+        font-size: 0.86rem;
+        font-weight: 400;
+        line-height: 1.45;
+        border-radius: 6px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+        transition: opacity 0.12s ease;
+        white-space: normal;
+        pointer-events: none;
+    }
+    .upload-hint-wrap:hover .upload-hint-tooltip {
+        visibility: visible;
+        opacity: 1;
+    }
+    div[data-testid="stVerticalBlock"]:has(#upload-hint-marker) {
+        margin-bottom: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    div[data-testid="stVerticalBlock"]:has(#top-controls-row) {
+        margin-top: 0 !important;
+        padding-top: 0 !important;
     }
     div[data-testid="stVerticalBlock"]:has(#top-controls-row)
     > div[data-testid="stHorizontalBlock"] .control-panel-title strong {
@@ -205,20 +257,6 @@ st.markdown(
         opacity: 0.45 !important;
         cursor: not-allowed !important;
         filter: grayscale(0.15);
-    }
-    div[data-testid="stVerticalBlock"]:has(#upload-hint-marker)
-    [data-testid="stButton"] {
-        margin: 0 0 1rem 0;
-    }
-    div[data-testid="stVerticalBlock"]:has(#upload-hint-marker)
-    [data-testid="stButton"] > button {
-        min-height: 2rem;
-        padding: 0.2rem 0.75rem;
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: #374151 !important;
-        background: #f3f4f6 !important;
-        border: 1px solid #d1d5db !important;
     }
     div[data-testid="stVerticalBlock"]:has(#excel-download-marker)
     [data-testid="stDownloadButton"] {
