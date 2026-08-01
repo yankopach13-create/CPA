@@ -12,7 +12,12 @@ from metrics_calculator import (
 )
 from report_tables import build_all_metrics_tables
 from excel_export import build_excel_filename, export_report_to_excel
-from spravochnik_config import get_google_credentials_from_secrets
+from spravochnik_config import (
+    build_google_sheets_url,
+    DEFAULT_SHEETS_ID,
+    get_google_credentials_from_secrets,
+    get_sheets_id_from_env_or_secrets,
+)
 from processor import (
     get_cycle_number,
     load_spravochnik,
@@ -28,6 +33,15 @@ st.set_page_config(
 )
 
 st.title("🛒 👤 Анализ клиентов в продукте")
+
+_sheets_id = get_sheets_id_from_env_or_secrets(st.secrets) or DEFAULT_SHEETS_ID
+st.markdown(
+    f'<p style="margin: 0 0 1rem 0;">'
+    f'<a href="{build_google_sheets_url(_sheets_id)}" target="_blank" rel="noopener noreferrer">'
+    "База данных"
+    "</a></p>",
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     """

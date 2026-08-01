@@ -6,6 +6,22 @@ from typing import Any
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CREDENTIALS_PATH = PROJECT_DIR / "google_credentials.json"
+DEFAULT_SHEETS_ID = "1B5PMa5qlzhf6ssLJ7iansVFPfLjdRlFLdsdyj2aXako"
+
+
+def build_google_sheets_url(sheets_id: str) -> str:
+    """Формирует ссылку на Google таблицу справочника."""
+    return f"https://docs.google.com/spreadsheets/d/{sheets_id.strip()}/edit"
+
+
+def get_sheets_id_from_env_or_secrets(streamlit_secrets: Any | None = None) -> str | None:
+    """Возвращает ID Google таблицы из secrets или переменных окружения."""
+    sheets_id = os.environ.get("GOOGLE_SHEETS_ID")
+    if streamlit_secrets is not None:
+        google_cfg = _read_google_section(streamlit_secrets)
+        if google_cfg.get("sheets_id"):
+            sheets_id = google_cfg.get("sheets_id")
+    return sheets_id
 
 
 def _to_plain_dict(section: Any) -> dict[str, Any]:
