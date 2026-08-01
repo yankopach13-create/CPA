@@ -5,6 +5,7 @@ __pycache__/
 .Python
 .env
 .streamlit/secrets.toml
+google_credentials.json
 .idea/
 .vscode/
 *.log

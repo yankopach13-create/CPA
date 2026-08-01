@@ -218,8 +218,20 @@ def _reset_analysis() -> None:
     st.session_state.analysis_started = False
 
 
+def _get_streamlit_secrets() -> dict | None:
+    try:
+        return dict(st.secrets)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_spravochnik_cached(streamlit_secrets: dict | None) -> dict:
+    return load_spravochnik(streamlit_secrets=streamlit_secrets)
+
+
 try:
-    spravochnik = load_spravochnik()
+    spravochnik = _load_spravochnik_cached(_get_streamlit_secrets())
 except FileNotFoundError as exc:
     st.warning(str(exc))
     spravochnik = None
@@ -252,7 +264,7 @@ with upload_col:
 if uploaded_purchases is not None:
     try:
         if spravochnik is None:
-            raise ValueError("Справочник не загружен. Проверьте файл spravochnik.xlsx.")
+            raise ValueError("Справочник не загружен. Проверьте Google Sheets или файл spravochnik.xlsx.")
 
         validate_file(uploaded_purchases)
         purchase_result = process_excel(uploaded_purchases)

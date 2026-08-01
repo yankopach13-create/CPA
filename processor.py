@@ -207,8 +207,8 @@ def get_cycle_weeks(cycles_df: pd.DataFrame, week_number: int) -> list[int]:
     return cycles[cycles["cycle"].eq(cycle_number)]["week"].tolist()
 
 
-def load_spravochnik() -> dict[str, Any]:
-    """Загружает справочник из папки проекта."""
+def load_spravochnik_from_excel() -> dict[str, Any]:
+    """Загружает справочник из локального файла spravochnik.xlsx."""
     if not SPRAVOCHNIK_PATH.exists():
         raise FileNotFoundError(
             f"Справочник не найден: {SPRAVOCHNIK_PATH.name}. "
@@ -240,6 +240,40 @@ def load_spravochnik() -> dict[str, Any]:
         "return_weeks": return_weeks,
         "volumes": volumes,
     }
+
+
+def load_spravochnik(
+    sheets_id: str | None = None,
+    credentials_path: str | None = None,
+    credentials_info: dict[str, Any] | None = None,
+    streamlit_secrets: Any | None = None,
+    prefer_excel: bool = False,
+) -> dict[str, Any]:
+    """
+    Загружает справочник из Google Sheets или локального Excel.
+
+    Если задан GOOGLE_SHEETS_ID (или sheets_id), по умолчанию используется Google Sheets.
+    При prefer_excel=True или отсутствии настроек Google — локальный spravochnik.xlsx.
+    """
+    from spravochnik_config import resolve_spravochnik_settings
+
+    settings = resolve_spravochnik_settings(
+        sheets_id=sheets_id,
+        credentials_path=credentials_path,
+        credentials_info=credentials_info,
+        streamlit_secrets=streamlit_secrets,
+    )
+
+    if not prefer_excel and settings["sheets_id"]:
+        from google_sheets import load_spravochnik_from_sheets
+
+        return load_spravochnik_from_sheets(
+            sheets_id=settings["sheets_id"],
+            credentials_path=settings["credentials_path"],
+            credentials_info=settings["credentials_info"],
+        )
+
+    return load_spravochnik_from_excel()
 
 
 def process_excel(uploaded_file) -> dict[str, Any]:
