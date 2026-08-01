@@ -257,7 +257,7 @@ except Exception as exc:
     with st.expander("Что проверить"):
         st.markdown(
             """
-            1. **Google Cloud** → APIs & Services → включён **Google Sheets API** для проекта `b2b-rnp`.
+            1. **Google Cloud** → APIs & Services → включены **Google Sheets API** и **Google Drive API** для проекта `b2b-rnp`.
             2. **Google Sheets** → Поделиться → добавлен `cpa-951@b2b-rnp.iam.gserviceaccount.com` (Читатель/Редактор).
             3. **Streamlit Cloud Secrets** → секции `[google]` и `[google.service_account]` заполнены.
             4. После изменений — **Reboot app** на Streamlit Cloud.

@@ -16,7 +16,10 @@ from processor import (
     parse_return_weeks,
 )
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
+]
 
 
 def _authorize_gspread(
@@ -104,7 +107,7 @@ def load_spravochnik_from_sheets(
             email_hint = service_email or "cpa-951@b2b-rnp.iam.gserviceaccount.com"
             raise PermissionError(
                 f"Нет доступа к Google таблице (403). "
-                f"1) В Google Cloud включите Google Sheets API для проекта b2b-rnp. "
+                f"1) В Google Cloud включите Google Sheets API и Google Drive API для проекта b2b-rnp. "
                 f"2) В Google Sheets откройте «Поделиться» и добавьте {email_hint} "
                 f"с правом «Читатель» или «Редактор»."
             ) from exc
@@ -115,7 +118,8 @@ def load_spravochnik_from_sheets(
         email_hint = service_email or "cpa-951@b2b-rnp.iam.gserviceaccount.com"
         raise PermissionError(
             f"Нет доступа к Google таблице. "
-            f"Добавьте {email_hint} в доступ к таблице и включите Google Sheets API."
+            f"Добавьте {email_hint} в доступ к таблице, "
+            f"включите Google Sheets API и Google Drive API."
         ) from exc
 
     sheet_names = [worksheet.title for worksheet in spreadsheet.worksheets()]
