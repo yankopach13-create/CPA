@@ -31,7 +31,7 @@ from processor import (
 
 st.set_page_config(
     page_title="Анализ клиентов в продукте",
-    page_icon="📊",
+    page_icon="🛒",
     layout="wide",
 )
 
