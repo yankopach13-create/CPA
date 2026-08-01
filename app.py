@@ -226,8 +226,8 @@ def _get_streamlit_secrets() -> dict | None:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _load_spravochnik_cached(streamlit_secrets: dict | None) -> dict:
-    return load_spravochnik(streamlit_secrets=streamlit_secrets)
+def _load_spravochnik_cached(_streamlit_secrets: dict | None) -> dict:
+    return load_spravochnik(streamlit_secrets=_streamlit_secrets)
 
 
 try:
