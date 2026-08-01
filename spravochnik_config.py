@@ -32,6 +32,23 @@ def _read_google_section(streamlit_secrets: Any) -> dict[str, Any]:
         return {}
 
 
+def get_google_credentials_from_secrets(streamlit_secrets: Any) -> tuple[str | None, dict[str, Any] | None]:
+    """Извлекает sheets_id и service_account из st.secrets для загрузки справочника."""
+    google_cfg = _read_google_section(streamlit_secrets)
+    if not google_cfg:
+        return None, None
+
+    sheets_id = google_cfg.get("sheets_id")
+    credentials_info = None
+    if "service_account" in google_cfg:
+        credentials_info = _to_plain_dict(google_cfg["service_account"])
+        private_key = credentials_info.get("private_key")
+        if private_key is not None:
+            credentials_info["private_key"] = str(private_key)
+
+    return sheets_id, credentials_info
+
+
 def resolve_spravochnik_settings(
     sheets_id: str | None = None,
     credentials_path: str | None = None,

@@ -12,6 +12,7 @@ from metrics_calculator import (
 )
 from report_tables import build_all_metrics_tables
 from excel_export import build_excel_filename, export_report_to_excel
+from spravochnik_config import get_google_credentials_from_secrets
 from processor import (
     get_cycle_number,
     load_spravochnik,
@@ -219,13 +220,27 @@ def _reset_analysis() -> None:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _load_spravochnik_cached() -> dict:
-    """Кэширует загрузку справочника; secrets читаются внутри функции."""
-    return load_spravochnik(streamlit_secrets=st.secrets)
+def _load_spravochnik_cached(
+    sheets_id: str | None,
+    _credentials_info: dict | None,
+) -> dict:
+    """Кэширует загрузку справочника. Secrets читаются снаружи — не внутри cache."""
+    return load_spravochnik(
+        sheets_id=sheets_id,
+        credentials_info=_credentials_info,
+    )
+
+
+def _read_spravochnik_auth() -> tuple[str | None, dict | None]:
+    try:
+        return get_google_credentials_from_secrets(st.secrets)
+    except Exception:
+        return None, None
 
 
 try:
-    spravochnik = _load_spravochnik_cached()
+    _sheets_id, _credentials_info = _read_spravochnik_auth()
+    spravochnik = _load_spravochnik_cached(_sheets_id, _credentials_info)
 except FileNotFoundError as exc:
     st.warning(str(exc))
     spravochnik = None

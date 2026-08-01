@@ -5,6 +5,7 @@ from typing import Any
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
+from gspread.exceptions import APIError, SpreadsheetNotFound
 
 from processor import (
     SHEET_CYCLES,
@@ -84,7 +85,26 @@ def load_spravochnik_from_sheets(
         raise ValueError("Не указан ID таблицы Google Sheets (GOOGLE_SHEETS_ID).")
 
     client = _authorize_gspread(credentials_path, credentials_info)
-    spreadsheet = client.open_by_key(sheets_id.strip())
+    service_email = None
+    if credentials_info:
+        service_email = credentials_info.get("client_email")
+
+    try:
+        spreadsheet = client.open_by_key(sheets_id.strip())
+    except SpreadsheetNotFound:
+        raise ValueError(
+            f"Таблица Google Sheets не найдена. Проверьте sheets_id: {sheets_id}"
+        ) from None
+    except APIError as exc:
+        if exc.response.status_code == 403:
+            email_hint = service_email or "сервисного аккаунта"
+            raise PermissionError(
+                f"Нет доступа к Google таблице. "
+                f"Откройте таблицу в Google Sheets и добавьте {email_hint} "
+                f"с правом «Читатель» или «Редактор»."
+            ) from exc
+        raise ValueError(f"Ошибка Google Sheets API: {exc}") from exc
+
     sheet_names = [worksheet.title for worksheet in spreadsheet.worksheets()]
 
     display_sheet = _pick_sheet(sheet_names, SHEET_DISPLAY, fallback_index=0)
