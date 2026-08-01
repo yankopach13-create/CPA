@@ -47,12 +47,15 @@ st.title("🛒 👤 Анализ клиентов в продукте")
 
 _sheets_id = get_sheets_id_from_env_or_secrets(st.secrets) or DEFAULT_SHEETS_ID
 st.markdown(
-    f'<p style="margin: 0 0 1rem 0;">'
+    f'<p style="margin: 0 0 0.5rem 0;">'
     f'<a href="{build_google_sheets_url(_sheets_id)}" target="_blank" rel="noopener noreferrer">'
     "База данных"
     "</a></p>",
     unsafe_allow_html=True,
 )
+st.markdown('<span id="upload-hint-marker" style="display:none;"></span>', unsafe_allow_html=True)
+if st.button("ℹ️  Подсказка по загрузке файла", key="upload_hint_button"):
+    _show_upload_hint_dialog()
 
 st.markdown(
     """
@@ -205,7 +208,7 @@ st.markdown(
     }
     div[data-testid="stVerticalBlock"]:has(#upload-hint-marker)
     [data-testid="stButton"] {
-        margin: 0 0 0.5rem 0;
+        margin: 0 0 1rem 0;
     }
     div[data-testid="stVerticalBlock"]:has(#upload-hint-marker)
     [data-testid="stButton"] > button {
@@ -310,9 +313,6 @@ with upload_col:
         '<p class="control-panel-title"><strong>Данные о покупках клиентов за 13 недель</strong></p>',
         unsafe_allow_html=True,
     )
-    st.markdown('<span id="upload-hint-marker" style="display:none;"></span>', unsafe_allow_html=True)
-    if st.button("ℹ️  Подсказка по загрузке файла", key="upload_hint_button"):
-        _show_upload_hint_dialog()
     with st.container(border=True):
         st.markdown('<span class="control-panel upload-control-panel"></span>', unsafe_allow_html=True)
         uploaded_purchases = st.file_uploader(
