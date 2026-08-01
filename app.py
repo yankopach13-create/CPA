@@ -33,6 +33,16 @@ st.set_page_config(
     layout="wide",
 )
 
+# Текст подсказки для загрузки файла — замените позже на финальный.
+UPLOAD_HINT_TEXT = (
+    "Здесь будет подсказка о том, какой файл нужно загрузить."
+)
+
+
+@st.dialog("Что нужно загрузить")
+def _show_upload_hint_dialog() -> None:
+    st.markdown(UPLOAD_HINT_TEXT)
+
 st.title("🛒 👤 Анализ клиентов в продукте")
 
 _sheets_id = get_sheets_id_from_env_or_secrets(st.secrets) or DEFAULT_SHEETS_ID
@@ -184,6 +194,29 @@ st.markdown(
         min-height: 2.5rem;
         font-weight: 600;
     }
+    div[data-testid="stVerticalBlock"]:has(#top-controls-row)
+    > div[data-testid="stHorizontalBlock"]
+    [data-testid="stButton"] > button:disabled,
+    div[data-testid="stVerticalBlock"]:has(#excel-download-marker)
+    [data-testid="stDownloadButton"] > button:disabled {
+        opacity: 0.45 !important;
+        cursor: not-allowed !important;
+        filter: grayscale(0.15);
+    }
+    div[data-testid="stVerticalBlock"]:has(#upload-hint-marker)
+    [data-testid="stButton"] {
+        margin: 0 0 0.5rem 0;
+    }
+    div[data-testid="stVerticalBlock"]:has(#upload-hint-marker)
+    [data-testid="stButton"] > button {
+        min-height: 2rem;
+        padding: 0.2rem 0.75rem;
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #374151 !important;
+        background: #f3f4f6 !important;
+        border: 1px solid #d1d5db !important;
+    }
     div[data-testid="stVerticalBlock"]:has(#excel-download-marker)
     [data-testid="stDownloadButton"] {
         width: 100%;
@@ -277,6 +310,9 @@ with upload_col:
         '<p class="control-panel-title"><strong>Данные о покупках клиентов за 13 недель</strong></p>',
         unsafe_allow_html=True,
     )
+    st.markdown('<span id="upload-hint-marker" style="display:none;"></span>', unsafe_allow_html=True)
+    if st.button("ℹ️  Подсказка по загрузке файла", key="upload_hint_button"):
+        _show_upload_hint_dialog()
     with st.container(border=True):
         st.markdown('<span class="control-panel upload-control-panel"></span>', unsafe_allow_html=True)
         uploaded_purchases = st.file_uploader(
@@ -384,20 +420,21 @@ if (
     )
     metrics_tables = build_all_metrics_tables(spravochnik, metrics_by_volume)
 
-if metrics_tables is not None:
-    with excel_download_slot.container():
-        st.markdown(
-            '<span id="excel-download-marker" style="display:none;"></span>',
-            unsafe_allow_html=True,
-        )
-        st.download_button(
-            "Скачать отчёт в эксель",
-            data=export_report_to_excel(metrics_tables),
-            file_name=build_excel_filename(selected_week_label),
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            key="excel_report_download",
-        )
+can_download_excel = metrics_tables is not None
+with excel_download_slot.container():
+    st.markdown(
+        '<span id="excel-download-marker" style="display:none;"></span>',
+        unsafe_allow_html=True,
+    )
+    st.download_button(
+        "Скачать отчёт в эксель",
+        data=export_report_to_excel(metrics_tables) if can_download_excel else b"",
+        file_name=build_excel_filename(selected_week_label) if can_download_excel else "report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        disabled=not can_download_excel,
+        key="excel_report_download",
+    )
 
 if metrics_tables is not None:
     st.markdown('<hr class="categories-section-divider">', unsafe_allow_html=True)
