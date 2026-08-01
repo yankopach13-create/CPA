@@ -28,7 +28,7 @@ def _format_metric_value(metric_name: str, value: Any) -> Any:
     if metric_name == "Возврат %":
         return f"{float(value):.2f}%"
     if metric_name == "Среднее в шт. на клиента с БК":
-        return f"{float(value):.2f}"
+        return f"{float(value):.2f}".replace(".", ",")
     if isinstance(value, float) and value.is_integer():
         return int(value)
     if isinstance(value, float):

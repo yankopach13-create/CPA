@@ -11,6 +11,7 @@ from metrics_calculator import (
     parse_selected_week,
 )
 from report_tables import build_all_metrics_tables
+from excel_export import build_excel_filename, export_report_to_excel
 from processor import (
     get_cycle_number,
     load_spravochnik,
@@ -52,7 +53,20 @@ st.markdown(
     }
     div[data-testid="stVerticalBlock"]:has(#top-controls-row)
     > div[data-testid="stHorizontalBlock"]
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(.control-panel) {
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.upload-control-panel) {
+        flex: 0 0 auto !important;
+        min-height: 4.5rem !important;
+        height: auto !important;
+        box-sizing: border-box !important;
+        background: #f9fafb !important;
+        border: 1px solid #d1d5db !important;
+        border-radius: 4px !important;
+        padding: 0.5rem 1rem !important;
+        margin: 0 !important;
+    }
+    div[data-testid="stVerticalBlock"]:has(#top-controls-row)
+    > div[data-testid="stHorizontalBlock"]
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.week-control-panel) {
         flex: 1 1 auto !important;
         min-height: 8.5rem !important;
         height: 100% !important;
@@ -150,6 +164,31 @@ st.markdown(
         min-height: 2.5rem;
         font-weight: 600;
     }
+    div[data-testid="stVerticalBlock"]:has(#excel-download-marker)
+    [data-testid="stDownloadButton"] {
+        width: 100%;
+        margin-top: 0.5rem;
+    }
+    div[data-testid="stVerticalBlock"]:has(#excel-download-marker)
+    [data-testid="stDownloadButton"] > button {
+        width: 100%;
+        min-height: 2.5rem;
+        font-weight: 600;
+        background-color: #6b7280 !important;
+        color: #ffffff !important;
+        border: 1px solid #4b5563 !important;
+    }
+    div[data-testid="stVerticalBlock"]:has(#excel-download-marker)
+    [data-testid="stDownloadButton"] > button:hover {
+        background-color: #4b5563 !important;
+        border-color: #374151 !important;
+        color: #ffffff !important;
+    }
+    div[data-testid="stVerticalBlock"]:has(#excel-download-marker)
+    [data-testid="stDownloadButton"] > button:focus {
+        box-shadow: none !important;
+        border-color: #374151 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -192,6 +231,7 @@ with upload_col:
             key="purchases_uploader",
             label_visibility="collapsed",
         )
+    excel_download_slot = st.empty()
 
 if uploaded_purchases is not None:
     try:
@@ -274,11 +314,11 @@ with week_col:
         ):
             st.session_state.analysis_started = True
 
-if processing_error:
-    st.error(f"Ошибка при обработке файла с покупками: {processing_error}")
-elif (
+metrics_tables = None
+if (
     st.session_state.analysis_started
     and purchase_result is not None
+    and processing_error is None
     and selected_week_label is not None
     and spravochnik is not None
 ):
@@ -290,6 +330,24 @@ elif (
     )
     metrics_tables = build_all_metrics_tables(spravochnik, metrics_by_volume)
 
+if metrics_tables is not None:
+    with excel_download_slot.container():
+        st.markdown(
+            '<span id="excel-download-marker" style="display:none;"></span>',
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            "Скачать отчёт в эксель",
+            data=export_report_to_excel(metrics_tables),
+            file_name=build_excel_filename(selected_week_label),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="excel_report_download",
+        )
+
+if processing_error:
+    st.error(f"Ошибка при обработке файла с покупками: {processing_error}")
+elif metrics_tables is not None:
     table_items = list(metrics_tables.items())
     for row_start in range(0, len(table_items), 3):
         row_items = table_items[row_start : row_start + 3]
