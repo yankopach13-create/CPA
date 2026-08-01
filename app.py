@@ -189,6 +189,18 @@ st.markdown(
         box-shadow: none !important;
         border-color: #374151 !important;
     }
+    .categories-section-divider {
+        border: none;
+        border-top: 1px solid #d1d5db;
+        margin: 1.25rem 0 0.75rem 0;
+    }
+    .categories-section-title {
+        font-size: 1.5rem;
+        font-weight: 800;
+        color: #111827;
+        line-height: 1.3;
+        margin: 0 0 1rem 0;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -344,6 +356,13 @@ if metrics_tables is not None:
             use_container_width=True,
             key="excel_report_download",
         )
+
+if metrics_tables is not None:
+    st.markdown('<hr class="categories-section-divider">', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="categories-section-title">Категории и продукты</p>',
+        unsafe_allow_html=True,
+    )
 
 if processing_error:
     st.error(f"Ошибка при обработке файла с покупками: {processing_error}")
