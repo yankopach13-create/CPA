@@ -5,8 +5,8 @@ from typing import Any
 
 import pandas as pd
 
-GROUP_LEVEL3_PATTERN = re.compile(
-    r"^группа\s*(?:ур\.?\s*)?3\s*$",
+GROUP_LEVEL_PATTERN = re.compile(
+    r"^группа\s*(?:ур\.?\s*)?(\d+)\s*$",
     re.IGNORECASE,
 )
 YEAR_WEEK_PATTERN = re.compile(r"год\s*[-\s]?\s*нед", re.IGNORECASE)
@@ -26,12 +26,31 @@ def _find_column(columns: list[Any], pattern: re.Pattern[str]) -> str:
     raise ValueError(f"Не найден столбец по шаблону: {pattern.pattern}")
 
 
+def _find_group_level_column(columns: list[Any], level: int) -> str | None:
+    """Ищет столбец «ГруппаN» / «Группа ур.N». Возвращает None, если не найден."""
+    for column in columns:
+        match = GROUP_LEVEL_PATTERN.match(_normalize_column_name(column))
+        if match and int(match.group(1)) == level:
+            return column
+    return None
+
+
 def _find_group_column(columns: list[Any]) -> str:
     """Ищет столбец уровня 3 (Группа3 / Группа ур.3) для фильтрации продуктов."""
-    for column in columns:
-        if GROUP_LEVEL3_PATTERN.match(_normalize_column_name(column)):
-            return column
-    raise ValueError("Не найден столбец «Группа3» (уровень 3).")
+    column = _find_group_level_column(columns, 3)
+    if column is None:
+        raise ValueError("Не найден столбец «Группа3» (уровень 3).")
+    return column
+
+
+def _clean_group_label(value: Any) -> str:
+    """Нормализует значение группы: пустые и nan → пустая строка."""
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"", "nan", "none"}:
+        return ""
+    return text
 
 
 def _has_client_code(value: Any) -> bool:
@@ -94,6 +113,7 @@ def prepare_purchases(df: pd.DataFrame) -> pd.DataFrame:
     columns = list(work_df.columns)
 
     group_col = _find_group_column(columns)
+    group1_col = _find_group_level_column(columns, 1)
     quantity_col = _find_column(columns, QUANTITY_PATTERN)
     client_col = _find_column(columns, CLIENT_CODE_PATTERN)
 
@@ -112,9 +132,16 @@ def prepare_purchases(df: pd.DataFrame) -> pd.DataFrame:
     first_col = work_df.columns[0]
     work_df = work_df[~work_df[first_col].astype(str).str.strip().str.lower().eq("итоги")]
 
+    group1_values = (
+        work_df[group1_col].map(_clean_group_label)
+        if group1_col is not None
+        else pd.Series([""] * len(work_df), index=work_df.index)
+    )
+
     prepared = pd.DataFrame(
         {
-            "model": work_df[group_col].astype(str).str.strip(),
+            "model": work_df[group_col].map(_clean_group_label),
+            "group1": group1_values,
             "quantity": pd.to_numeric(work_df[quantity_col], errors="coerce").fillna(0),
             "client_code": work_df[client_col],
             "has_bc": work_df[client_col].map(_has_client_code),
@@ -160,3 +187,73 @@ def filter_by_models(purchases: pd.DataFrame, models: list[str]) -> pd.DataFrame
         return purchases.iloc[0:0].copy()
     model_set = {model.strip() for model in models}
     return purchases[purchases["model"].isin(model_set)].copy()
+
+
+def collect_known_models(
+    volumes: dict[str, dict[str, list[str]]],
+    excluded: list[str] | set[str] | None = None,
+) -> set[str]:
+    """Собирает все известные модели: категории, детализация и исключённые."""
+    known: set[str] = set()
+    for config in volumes.values():
+        for model in config.get("category", []):
+            cleaned = str(model).strip()
+            if cleaned:
+                known.add(cleaned)
+        for model in config.get("detail", []):
+            cleaned = str(model).strip()
+            if cleaned:
+                known.add(cleaned)
+    if excluded:
+        for model in excluded:
+            cleaned = str(model).strip()
+            if cleaned:
+                known.add(cleaned)
+    return known
+
+
+def format_product_display_name(model: str, group1: str = "") -> str:
+    """Формирует подпись продукта для UI: «Группа1 / Группа3»."""
+    model_name = str(model).strip()
+    group1_name = str(group1).strip() if group1 else ""
+    if group1_name:
+        return f"{group1_name} / {model_name}"
+    return model_name
+
+
+def find_unknown_products(
+    purchases_df: pd.DataFrame,
+    volumes: dict[str, dict[str, list[str]]],
+    excluded: list[str] | set[str] | None = None,
+) -> list[dict[str, str]]:
+    """
+    Находит продукты из файла, которых нет в справочнике и в исключённых.
+
+    Возвращает список словарей: model (Группа3), group1, display_name.
+    """
+    purchases = (
+        purchases_df
+        if "model" in purchases_df.columns
+        else prepare_purchases(purchases_df)
+    )
+    known = collect_known_models(volumes, excluded)
+    unknown: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for _, row in purchases.iterrows():
+        model = str(row["model"]).strip()
+        if not model or model in known or model in seen:
+            continue
+        group1 = ""
+        if "group1" in purchases.columns:
+            group1 = _clean_group_label(row["group1"])
+        unknown.append(
+            {
+                "model": model,
+                "group1": group1,
+                "display_name": format_product_display_name(model, group1),
+            }
+        )
+        seen.add(model)
+
+    return unknown

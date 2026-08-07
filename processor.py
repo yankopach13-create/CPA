@@ -11,8 +11,10 @@ SPRAVOCHNIK_PATH = PROJECT_DIR / "spravochnik.xlsx"
 SHEET_DISPLAY = "Категории и продукты"
 SHEET_CYCLES = "Недели циклов"
 SHEET_RETURN = "Возврат"
+SHEET_EXCLUDED = "Исключённые"
 LIST_CATEGORY = "Категория"
 LIST_DETAIL = "Детализация"
+NEW_CATEGORY_OPTION = "Добавить новую категорию"
 
 
 def _pick_sheet(sheet_names: list[str], preferred_name: str, fallback_index: int) -> str:
@@ -107,6 +109,39 @@ def parse_return_weeks(return_df: pd.DataFrame) -> dict[str, int]:
             continue
         result[category_name] = int(weeks)
 
+    return result
+
+
+def parse_excluded_products(excluded_df: pd.DataFrame | None) -> list[str]:
+    """
+    Парсит лист «Исключённые».
+
+    Ожидает столбец «Группа3» (или первый столбец). Возвращает список моделей.
+    """
+    if excluded_df is None or excluded_df.empty:
+        return []
+
+    column_map = {
+        str(column).strip().lower(): column for column in excluded_df.columns
+    }
+    model_column = None
+    for name, original in column_map.items():
+        if "группа" in name and "3" in name:
+            model_column = original
+            break
+    if model_column is None:
+        model_column = excluded_df.columns[0]
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in excluded_df[model_column]:
+        if pd.isna(value):
+            continue
+        model = str(value).strip()
+        if not model or model.lower() == "nan" or model in seen:
+            continue
+        result.append(model)
+        seen.add(model)
     return result
 
 
@@ -239,6 +274,9 @@ def load_spravochnik_from_excel() -> dict[str, Any]:
         "return": return_df,
         "return_weeks": return_weeks,
         "volumes": volumes,
+        "excluded": [],
+        "sheets_id": None,
+        "writable": False,
     }
 
 

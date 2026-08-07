@@ -14,6 +14,12 @@ from metrics_calculator import (
 )
 from report_tables import build_all_metrics_tables
 from excel_export import build_excel_filename, export_report_to_excel
+from google_sheets import (
+    add_excluded_product,
+    add_product_to_category,
+    create_category_with_product,
+)
+from purchases import find_unknown_products
 from spravochnik_config import (
     build_google_sheets_url,
     DEFAULT_SHEETS_ID,
@@ -22,6 +28,7 @@ from spravochnik_config import (
     has_google_secrets_config,
 )
 from processor import (
+    NEW_CATEGORY_OPTION,
     get_cycle_number,
     load_spravochnik,
     process_excel,
@@ -302,10 +309,144 @@ st.markdown(
 
 if "analysis_started" not in st.session_state:
     st.session_state.analysis_started = False
+if "pending_new_products" not in st.session_state:
+    st.session_state.pending_new_products = []
+if "pending_new_products_total" not in st.session_state:
+    st.session_state.pending_new_products_total = 0
 
 
 def _reset_analysis() -> None:
     st.session_state.analysis_started = False
+
+
+def _resolve_sheets_credentials(spravochnik: dict) -> tuple[str | None, str | None, dict | None]:
+    """Достаёт sheets_id и учётные данные для записи в Google Sheets."""
+    sheets_id = spravochnik.get("sheets_id")
+    credentials_path = spravochnik.get("credentials_path")
+    credentials_info = spravochnik.get("credentials_info")
+
+    if not sheets_id or (not credentials_path and not credentials_info):
+        secrets_id, secrets_info = get_google_credentials_from_secrets(st.secrets)
+        sheets_id = sheets_id or secrets_id or DEFAULT_SHEETS_ID
+        credentials_info = credentials_info or secrets_info
+
+    return sheets_id, credentials_path, credentials_info
+
+
+@st.dialog("Найден новый продукт")
+def _new_product_dialog(spravochnik: dict) -> None:
+    """Диалог назначения неизвестного продукта в категорию или исключения."""
+    pending: list[dict[str, str]] = st.session_state.pending_new_products
+    if not pending:
+        return
+
+    product = pending[0]
+    product_key = product["model"]
+    total = st.session_state.pending_new_products_total or len(pending)
+    remaining = len(pending)
+
+    st.markdown(f"**{product['display_name']}**")
+    st.caption(f"Осталось обработать: {remaining} из {total}")
+
+    categories = list(spravochnik.get("volumes", {}).keys())
+    options = [*categories, NEW_CATEGORY_OPTION]
+    selected = st.selectbox(
+        "Отнесите продукт в категорию",
+        options,
+        key=f"new_prod_category_{product_key}",
+    )
+
+    new_category_name = ""
+    return_weeks_value = 4
+    if selected == NEW_CATEGORY_OPTION:
+        new_category_name = st.text_input(
+            "Название новой категории",
+            key=f"new_prod_cat_name_{product_key}",
+        )
+        return_weeks_value = int(
+            st.number_input(
+                "Возврат (недель)",
+                min_value=1,
+                value=4,
+                step=1,
+                key=f"new_prod_return_{product_key}",
+            )
+        )
+
+    add_to_detail = (
+        st.radio(
+            "Добавить продукт в детализацию по категории?",
+            ["Нет", "Да"],
+            horizontal=True,
+            key=f"new_prod_detail_{product_key}",
+        )
+        == "Да"
+    )
+
+    error_slot = st.empty()
+    save_col, skip_col = st.columns(2)
+
+    def _finish_current() -> None:
+        pending.pop(0)
+        st.session_state.pending_new_products = pending
+        st.rerun()
+
+    with save_col:
+        if st.button("Сохранить", type="primary", use_container_width=True):
+            try:
+                sheets_id, credentials_path, credentials_info = _resolve_sheets_credentials(
+                    spravochnik
+                )
+                if not sheets_id or not spravochnik.get("writable"):
+                    raise ValueError(
+                        "Добавление продуктов доступно только при подключении к Google Sheets. "
+                        "Service account должен иметь право «Редактор»."
+                    )
+
+                if selected == NEW_CATEGORY_OPTION:
+                    if not new_category_name.strip():
+                        raise ValueError("Укажите название новой категории.")
+                    create_category_with_product(
+                        sheets_id=sheets_id,
+                        category_name=new_category_name,
+                        product_model=product["model"],
+                        return_weeks=return_weeks_value,
+                        add_to_detail=add_to_detail,
+                        credentials_path=credentials_path,
+                        credentials_info=credentials_info,
+                    )
+                else:
+                    add_product_to_category(
+                        sheets_id=sheets_id,
+                        category_name=selected,
+                        product_model=product["model"],
+                        add_to_detail=add_to_detail,
+                        credentials_path=credentials_path,
+                        credentials_info=credentials_info,
+                    )
+                _finish_current()
+            except Exception as exc:
+                error_slot.error(str(exc))
+
+    with skip_col:
+        if st.button("Пропустить", use_container_width=True):
+            try:
+                sheets_id, credentials_path, credentials_info = _resolve_sheets_credentials(
+                    spravochnik
+                )
+                if not sheets_id or not spravochnik.get("writable"):
+                    raise ValueError(
+                        "Исключение продуктов доступно только при подключении к Google Sheets."
+                    )
+                add_excluded_product(
+                    sheets_id=sheets_id,
+                    product_model=product["model"],
+                    credentials_path=credentials_path,
+                    credentials_info=credentials_info,
+                )
+                _finish_current()
+            except Exception as exc:
+                error_slot.error(str(exc))
 
 
 def _load_spravochnik_for_app() -> dict:
@@ -332,7 +473,7 @@ except Exception as exc:
         st.markdown(
             """
             1. **Google Cloud** → APIs & Services → включены **Google Sheets API** и **Google Drive API** для проекта `b2b-rnp`.
-            2. **Google Sheets** → Поделиться → добавлен `cpa-951@b2b-rnp.iam.gserviceaccount.com` (Читатель/Редактор).
+            2. **Google Sheets** → Поделиться → добавлен `cpa-951@b2b-rnp.iam.gserviceaccount.com` с правом **Редактор** (нужно для новых продуктов).
             3. **Streamlit Cloud Secrets** → секции `[google]` и `[google.service_account]` заполнены.
             4. После изменений — **Reboot app** на Streamlit Cloud.
             """
@@ -377,8 +518,29 @@ if uploaded_purchases is not None:
             st.session_state.loaded_file_key = file_key
             st.session_state.actual_week_select = detected_label
             st.session_state.analysis_started = False
+
+            if spravochnik.get("writable"):
+                unknowns = find_unknown_products(
+                    purchase_result["data"],
+                    spravochnik.get("volumes", {}),
+                    spravochnik.get("excluded", []),
+                )
+                st.session_state.pending_new_products = unknowns
+                st.session_state.pending_new_products_total = len(unknowns)
+            else:
+                st.session_state.pending_new_products = []
+                st.session_state.pending_new_products_total = 0
     except Exception as exc:
         processing_error = str(exc)
+
+has_pending_products = bool(st.session_state.get("pending_new_products"))
+if (
+    has_pending_products
+    and purchase_result is not None
+    and processing_error is None
+    and spravochnik is not None
+):
+    _new_product_dialog(spravochnik)
 
 with week_col:
     st.markdown(
@@ -433,7 +595,13 @@ with week_col:
             and processing_error is None
             and spravochnik is not None
             and selected_week_label is not None
+            and not has_pending_products
         )
+        if has_pending_products:
+            st.warning(
+                f"Найдены новые продукты ({len(st.session_state.pending_new_products)}). "
+                "Назначьте или пропустите их, затем нажмите «Начать анализ»."
+            )
         if st.button(
             "Начать анализ",
             type="primary",
