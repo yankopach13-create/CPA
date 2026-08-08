@@ -38,31 +38,20 @@ def validate_file(uploaded_file) -> None:
         raise ValueError("Поддерживаются только файлы .xlsx и .xls.")
 
 
-def _read_excel(uploaded_file) -> dict[str, pd.DataFrame]:
-    """Читает все листы Excel-файла."""
+def _read_main_excel_sheet(uploaded_file) -> tuple[str, pd.DataFrame]:
+    """Читает первый (основной) лист Excel-файла с покупками."""
     content = uploaded_file.read()
     uploaded_file.seek(0)
 
     name = uploaded_file.name.lower()
     engine = "openpyxl" if name.endswith(".xlsx") else "xlrd"
-    return pd.read_excel(BytesIO(content), sheet_name=None, engine=engine)
+    excel_file = pd.ExcelFile(BytesIO(content), engine=engine)
+    if not excel_file.sheet_names:
+        raise ValueError("Файл не содержит данных.")
 
-
-def _build_column_info(df: pd.DataFrame) -> pd.DataFrame:
-    """Формирует сводку по столбцам основного листа."""
-    rows = []
-    for column in df.columns:
-        series = df[column]
-        rows.append(
-            {
-                "Столбец": column,
-                "Тип": str(series.dtype),
-                "Заполнено": int(series.notna().sum()),
-                "Пусто": int(series.isna().sum()),
-                "Уникальных": int(series.nunique(dropna=True)),
-            }
-        )
-    return pd.DataFrame(rows)
+    main_sheet_name = excel_file.sheet_names[0]
+    main_df = pd.read_excel(excel_file, sheet_name=main_sheet_name)
+    return main_sheet_name, main_df
 
 
 def _parse_model_list(series: pd.Series) -> list[str]:
@@ -98,18 +87,17 @@ def parse_return_weeks(return_df: pd.DataFrame) -> dict[str, int]:
             "Лист «Возврат» должен содержать столбцы «Категория» и «Возврат (недель)»."
         )
 
-    result: dict[str, int] = {}
-    for _, row in return_df.iterrows():
-        category = row[category_column]
-        weeks = row[weeks_column]
-        if pd.isna(category) or pd.isna(weeks):
-            continue
-        category_name = str(category).strip()
-        if not category_name:
-            continue
-        result[category_name] = int(weeks)
-
-    return result
+    categories = return_df[category_column].astype("string").str.strip()
+    weeks = pd.to_numeric(return_df[weeks_column], errors="coerce")
+    valid = categories.notna() & categories.ne("") & weeks.notna()
+    return {
+        str(category): int(week)
+        for category, week in zip(
+            categories[valid].tolist(),
+            weeks[valid].tolist(),
+            strict=True,
+        )
+    }
 
 
 def parse_excluded_products(excluded_df: pd.DataFrame | None) -> list[str]:
@@ -193,11 +181,13 @@ def parse_display_volumes(display_df: pd.DataFrame) -> dict[str, dict[str, list[
     return volumes
 
 
-def _normalize_cycles_df(cycles_df: pd.DataFrame) -> pd.DataFrame:
+def normalize_cycles_df(cycles_df: pd.DataFrame) -> pd.DataFrame:
     """Приводит лист «Недели циклов» к столбцам week и cycle."""
-    normalized = cycles_df.copy()
+    if {"week", "cycle"}.issubset(cycles_df.columns):
+        return cycles_df
+
     column_map = {
-        str(column).strip().lower(): column for column in normalized.columns
+        str(column).strip().lower(): column for column in cycles_df.columns
     }
 
     week_column = None
@@ -215,8 +205,8 @@ def _normalize_cycles_df(cycles_df: pd.DataFrame) -> pd.DataFrame:
 
     result = pd.DataFrame(
         {
-            "week": pd.to_numeric(normalized[week_column], errors="coerce"),
-            "cycle": pd.to_numeric(normalized[cycle_column], errors="coerce"),
+            "week": pd.to_numeric(cycles_df[week_column], errors="coerce"),
+            "cycle": pd.to_numeric(cycles_df[cycle_column], errors="coerce"),
         }
     )
     return result.dropna(subset=["week", "cycle"]).astype({"week": int, "cycle": int})
@@ -224,7 +214,7 @@ def _normalize_cycles_df(cycles_df: pd.DataFrame) -> pd.DataFrame:
 
 def get_cycle_number(cycles_df: pd.DataFrame, week_number: int) -> int | None:
     """Возвращает номер цикла для указанной недели."""
-    cycles = _normalize_cycles_df(cycles_df)
+    cycles = normalize_cycles_df(cycles_df)
     matched = cycles[cycles["week"].eq(week_number)]
     if matched.empty:
         return None
@@ -233,7 +223,7 @@ def get_cycle_number(cycles_df: pd.DataFrame, week_number: int) -> int | None:
 
 def get_cycle_weeks(cycles_df: pd.DataFrame, week_number: int) -> list[int]:
     """Возвращает все недели цикла для выбранной недели."""
-    cycles = _normalize_cycles_df(cycles_df)
+    cycles = normalize_cycles_df(cycles_df)
     matched = cycles[cycles["week"].eq(week_number)]
     if matched.empty:
         return []
@@ -266,11 +256,13 @@ def load_spravochnik_from_excel() -> dict[str, Any]:
     return_df = pd.read_excel(excel_file, sheet_name=return_sheet)
     volumes = parse_display_volumes(display_df)
     return_weeks = parse_return_weeks(return_df)
+    cycles_normalized = normalize_cycles_df(cycles_df)
 
     return {
         "path": SPRAVOCHNIK_PATH,
         "display": display_df,
         "cycles": cycles_df,
+        "cycles_normalized": cycles_normalized,
         "return": return_df,
         "return_weeks": return_weeks,
         "volumes": volumes,
@@ -319,28 +311,15 @@ def load_spravochnik(
 
 def process_excel(uploaded_file) -> dict[str, Any]:
     """
-    Обрабатывает загруженный Excel-файл.
+    Обрабатывает загруженный Excel-файл с покупками.
 
-    Возвращает словарь с предпросмотром, сводкой и данными по листам.
+    Читает только основной лист — без лишней статистики.
     """
-    sheets = _read_excel(uploaded_file)
-
-    if not sheets:
-        raise ValueError("Файл не содержит данных.")
-
-    main_sheet_name = next(iter(sheets))
-    main_df = sheets[main_sheet_name].copy()
-
-    numeric_cols = main_df.select_dtypes(include="number").columns
-    numeric_summary = main_df[numeric_cols].describe() if len(numeric_cols) else None
+    main_sheet_name, main_df = _read_main_excel_sheet(uploaded_file)
 
     return {
         "main_sheet": main_sheet_name,
         "row_count": len(main_df),
         "column_count": len(main_df.columns),
-        "preview": main_df.head(100),
-        "column_info": _build_column_info(main_df),
-        "numeric_summary": numeric_summary,
-        "sheets": sheets,
         "data": main_df,
     }

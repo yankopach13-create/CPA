@@ -43,65 +43,54 @@ def _find_group_column(columns: list[Any]) -> str:
     return column
 
 
-def _clean_group_label(value: Any) -> str:
-    """Нормализует значение группы: пустые и nan → пустая строка."""
-    if pd.isna(value):
-        return ""
-    text = str(value).strip()
-    if text.lower() in {"", "nan", "none"}:
-        return ""
-    return text
+def _clean_group_series(series: pd.Series) -> pd.Series:
+    """Векторизованная нормализация значений группы."""
+    text = series.astype("string").str.strip()
+    empty_mask = text.isna() | text.str.lower().isin({"", "nan", "none", "<na>"})
+    return text.mask(empty_mask, "").fillna("")
 
 
-def _has_client_code(value: Any) -> bool:
-    if pd.isna(value):
-        return False
-    code = str(value).strip()
-    return code != "" and code.lower() != "nan"
+def _has_client_code_series(series: pd.Series) -> pd.Series:
+    """Векторизованная проверка наличия кода клиента (БК)."""
+    text = series.astype("string").str.strip()
+    return ~(text.isna() | text.eq("") | text.str.lower().isin({"nan", "<na>"}))
 
 
-def _parse_week_number(week_part: str) -> int:
-    """Преобразует номер недели, включая вариант «53+1»."""
-    normalized = week_part.strip().replace(" ", "")
-    if normalized in {"53+1", "53+1.0"}:
-        return 54
-    return int(float(normalized))
+def _parse_week_number_series(week_part: pd.Series) -> pd.Series:
+    """Преобразует номера недель, включая вариант «53+1»."""
+    normalized = week_part.astype("string").str.strip().str.replace(" ", "", regex=False)
+    result = pd.Series(pd.NA, index=week_part.index, dtype="Float64")
+    special = normalized.isin({"53+1", "53+1.0"})
+    result = result.mask(special, 54)
+    numeric = pd.to_numeric(normalized.mask(special), errors="coerce")
+    return result.fillna(numeric)
 
 
-def _parse_year_week(value: Any) -> tuple[int, int] | None:
-    if pd.isna(value):
-        return None
+def _parse_year_week_series(series: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """Парсит столбец «Год-Неделя» в пару серий year / week."""
+    text = series.astype("string").str.strip().str.replace("\\", "/", regex=False)
+    has_slash = text.str.contains("/", na=False)
 
-    text = str(value).strip().replace("\\", "/")
-    if "/" in text:
-        year_part, week_part = text.split("/", 1)
-        return int(float(year_part)), _parse_week_number(week_part)
+    year = pd.Series(pd.NA, index=series.index, dtype="Float64")
+    week = pd.Series(pd.NA, index=series.index, dtype="Float64")
 
-    normalized = text.replace(" ", "")
-    if normalized in {"53+1", "53+1.0"}:
-        return None
+    if has_slash.any():
+        parts = text.loc[has_slash].str.split("/", n=1, expand=True)
+        year.loc[has_slash] = pd.to_numeric(parts[0], errors="coerce")
+        week.loc[has_slash] = _parse_week_number_series(parts[1])
 
-    if text.isdigit():
-        return None
-
-    try:
-        week = int(float(text))
-    except ValueError:
-        return None
-    return None
+    return year, week
 
 
-def _parse_week_column_value(value: Any) -> int | None:
-    if pd.isna(value):
-        return None
-    text = str(value).strip()
-    normalized = text.replace(" ", "")
-    if normalized in {"53+1", "53+1.0"}:
-        return 54
-    try:
-        return int(float(text))
-    except ValueError:
-        return None
+def _parse_week_column_series(series: pd.Series) -> pd.Series:
+    """Парсит отдельный столбец «Неделя»."""
+    text = series.astype("string").str.strip()
+    normalized = text.str.replace(" ", "", regex=False)
+    result = pd.Series(pd.NA, index=series.index, dtype="Float64")
+    special = normalized.isin({"53+1", "53+1.0"})
+    result = result.mask(special, 54)
+    numeric = pd.to_numeric(normalized.mask(special), errors="coerce")
+    return result.fillna(numeric)
 
 
 def prepare_purchases(df: pd.DataFrame) -> pd.DataFrame:
@@ -109,9 +98,11 @@ def prepare_purchases(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         raise ValueError("Файл с покупками не содержит строк.")
 
-    work_df = df.copy()
-    columns = list(work_df.columns)
+    # Уже подготовленный кадр — не парсим повторно.
+    if {"model", "quantity", "client_code", "has_bc", "year", "week"}.issubset(df.columns):
+        return df
 
+    columns = list(df.columns)
     group_col = _find_group_column(columns)
     group1_col = _find_group_level_column(columns, 1)
     quantity_col = _find_column(columns, QUANTITY_PATTERN)
@@ -129,51 +120,50 @@ def prepare_purchases(df: pd.DataFrame) -> pd.DataFrame:
     if year_week_col is None and week_col is None:
         raise ValueError("Не найден столбец «Год-Неделя» или «Неделя».")
 
-    first_col = work_df.columns[0]
-    work_df = work_df[~work_df[first_col].astype(str).str.strip().str.lower().eq("итоги")]
+    first_col = df.columns[0]
+    totals_mask = df[first_col].astype("string").str.strip().str.lower().eq("итоги")
+    work_df = df.loc[~totals_mask]
 
     group1_values = (
-        work_df[group1_col].map(_clean_group_label)
+        _clean_group_series(work_df[group1_col])
         if group1_col is not None
-        else pd.Series([""] * len(work_df), index=work_df.index)
+        else pd.Series("", index=work_df.index, dtype="string")
     )
 
     prepared = pd.DataFrame(
         {
-            "model": work_df[group_col].map(_clean_group_label),
+            "model": _clean_group_series(work_df[group_col]),
             "group1": group1_values,
             "quantity": pd.to_numeric(work_df[quantity_col], errors="coerce").fillna(0),
             "client_code": work_df[client_col],
-            "has_bc": work_df[client_col].map(_has_client_code),
-        }
+            "has_bc": _has_client_code_series(work_df[client_col]),
+        },
+        index=work_df.index,
     )
 
-    parsed_weeks = (
-        work_df[year_week_col].map(_parse_year_week)
-        if year_week_col is not None
-        else pd.Series([None] * len(work_df))
-    )
-    prepared["year"] = parsed_weeks.map(lambda item: item[0] if item else pd.NA)
-    prepared["week"] = parsed_weeks.map(lambda item: item[1] if item else pd.NA)
+    if year_week_col is not None:
+        year_values, week_values = _parse_year_week_series(work_df[year_week_col])
+        prepared["year"] = year_values
+        prepared["week"] = week_values
+    else:
+        prepared["year"] = pd.Series(pd.NA, index=work_df.index, dtype="Float64")
+        prepared["week"] = pd.Series(pd.NA, index=work_df.index, dtype="Float64")
 
     if prepared["week"].isna().any() and week_col is not None:
-        fallback_weeks = work_df[week_col].map(_parse_week_column_value)
+        fallback_weeks = _parse_week_column_series(work_df[week_col])
         prepared["week"] = prepared["week"].fillna(fallback_weeks)
 
     if prepared["year"].isna().any():
         known_year = prepared["year"].dropna()
-        fallback_year = known_year.iloc[0] if not known_year.empty else None
-        if fallback_year is not None:
-            prepared["year"] = prepared["year"].fillna(fallback_year)
+        if not known_year.empty:
+            prepared["year"] = prepared["year"].fillna(known_year.iloc[0])
 
-    prepared = prepared.dropna(subset=["year"])
-    prepared = prepared.dropna(subset=["week"])
+    prepared = prepared.dropna(subset=["year", "week"])
     prepared["week"] = prepared["week"].astype(int)
     prepared["year"] = prepared["year"].astype(int)
-    prepared["year_week"] = list(zip(prepared["year"], prepared["week"], strict=True))
 
-    prepared = prepared[prepared["model"].ne("") & prepared["model"].str.lower().ne("nan")]
-    prepared = prepared.reset_index(drop=True)
+    model_ok = prepared["model"].ne("") & prepared["model"].str.lower().ne("nan")
+    prepared = prepared.loc[model_ok].reset_index(drop=True)
 
     if prepared.empty:
         raise ValueError("После обработки не осталось строк с покупками.")
@@ -184,9 +174,9 @@ def prepare_purchases(df: pd.DataFrame) -> pd.DataFrame:
 def filter_by_models(purchases: pd.DataFrame, models: list[str]) -> pd.DataFrame:
     """Фильтрует покупки по списку моделей из справочника."""
     if not models:
-        return purchases.iloc[0:0].copy()
+        return purchases.iloc[0:0]
     model_set = {model.strip() for model in models}
-    return purchases[purchases["model"].isin(model_set)].copy()
+    return purchases[purchases["model"].isin(model_set)]
 
 
 def collect_known_models(
@@ -237,23 +227,22 @@ def find_unknown_products(
         else prepare_purchases(purchases_df)
     )
     known = collect_known_models(volumes, excluded)
-    unknown: list[dict[str, str]] = []
-    seen: set[str] = set()
 
-    for _, row in purchases.iterrows():
-        model = str(row["model"]).strip()
-        if not model or model in known or model in seen:
-            continue
-        group1 = ""
-        if "group1" in purchases.columns:
-            group1 = _clean_group_label(row["group1"])
-        unknown.append(
-            {
-                "model": model,
-                "group1": group1,
-                "display_name": format_product_display_name(model, group1),
-            }
-        )
-        seen.add(model)
+    unique = purchases.loc[:, ["model"]].copy()
+    if "group1" in purchases.columns:
+        unique["group1"] = _clean_group_series(purchases["group1"])
+    else:
+        unique["group1"] = ""
 
-    return unknown
+    unique["model"] = unique["model"].astype(str).str.strip()
+    unique = unique[unique["model"].ne("") & ~unique["model"].isin(known)]
+    unique = unique.drop_duplicates(subset=["model"], keep="first")
+
+    return [
+        {
+            "model": row.model,
+            "group1": row.group1,
+            "display_name": format_product_display_name(row.model, row.group1),
+        }
+        for row in unique.itertuples(index=False)
+    ]

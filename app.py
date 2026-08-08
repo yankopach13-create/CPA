@@ -19,7 +19,7 @@ from google_sheets import (
     add_product_to_category,
     create_category_with_product,
 )
-from purchases import find_unknown_products
+from purchases import find_unknown_products, prepare_purchases
 from spravochnik_config import (
     build_google_sheets_url,
     DEFAULT_SHEETS_ID,
@@ -34,6 +34,9 @@ from processor import (
     process_excel,
     validate_file,
 )
+
+# TTL кэша справочника (секунды). После записи продуктов кэш сбрасывается явно.
+SPRAVOCHNIK_CACHE_TTL = 300
 
 
 st.set_page_config(
@@ -313,9 +316,33 @@ if "pending_new_products" not in st.session_state:
     st.session_state.pending_new_products = []
 if "pending_new_products_total" not in st.session_state:
     st.session_state.pending_new_products_total = 0
+if "purchases_raw" not in st.session_state:
+    st.session_state.purchases_raw = None
+if "purchases_prepared" not in st.session_state:
+    st.session_state.purchases_prepared = None
+if "metrics_tables" not in st.session_state:
+    st.session_state.metrics_tables = None
+if "excel_report_bytes" not in st.session_state:
+    st.session_state.excel_report_bytes = None
+if "metrics_cache_key" not in st.session_state:
+    st.session_state.metrics_cache_key = None
 
 
 def _reset_analysis() -> None:
+    """Сбрасывает результат анализа при смене недели."""
+    st.session_state.analysis_started = False
+    st.session_state.metrics_tables = None
+    st.session_state.excel_report_bytes = None
+    st.session_state.metrics_cache_key = None
+
+
+def _clear_purchase_cache() -> None:
+    """Очищает кэш загруженного файла покупок."""
+    st.session_state.purchases_raw = None
+    st.session_state.purchases_prepared = None
+    st.session_state.metrics_tables = None
+    st.session_state.excel_report_bytes = None
+    st.session_state.metrics_cache_key = None
     st.session_state.analysis_started = False
 
 
@@ -331,6 +358,26 @@ def _resolve_sheets_credentials(spravochnik: dict) -> tuple[str | None, str | No
         credentials_info = credentials_info or secrets_info
 
     return sheets_id, credentials_path, credentials_info
+
+
+@st.cache_data(ttl=SPRAVOCHNIK_CACHE_TTL, show_spinner="Загрузка справочника…")
+def _cached_load_spravochnik(
+    use_google_secrets: bool,
+    sheets_id: str | None,
+    credentials_info: dict | None,
+) -> dict:
+    """Кэшированная загрузка справочника (Google Sheets или локальный Excel)."""
+    if use_google_secrets:
+        return load_spravochnik(
+            sheets_id=sheets_id or DEFAULT_SHEETS_ID,
+            credentials_info=credentials_info,
+        )
+    return load_spravochnik(streamlit_secrets=st.secrets)
+
+
+def _invalidate_spravochnik_cache() -> None:
+    """Сбрасывает кэш справочника после записи в Google Sheets."""
+    _cached_load_spravochnik.clear()
 
 
 @st.dialog("Найден новый продукт")
@@ -389,6 +436,7 @@ def _new_product_dialog(spravochnik: dict) -> None:
     def _finish_current() -> None:
         pending.pop(0)
         st.session_state.pending_new_products = pending
+        _invalidate_spravochnik_cache()
         st.rerun()
 
     with save_col:
@@ -450,15 +498,19 @@ def _new_product_dialog(spravochnik: dict) -> None:
 
 
 def _load_spravochnik_for_app() -> dict:
-    """Загружает справочник: Google Sheets на Cloud или локальный Excel."""
+    """Загружает справочник с кэшированием между rerun."""
     if has_google_secrets_config(st.secrets):
         sheets_id, credentials_info = get_google_credentials_from_secrets(st.secrets)
-        sheets_id = sheets_id or DEFAULT_SHEETS_ID
-        return load_spravochnik(
-            sheets_id=sheets_id,
+        return _cached_load_spravochnik(
+            use_google_secrets=True,
+            sheets_id=sheets_id or DEFAULT_SHEETS_ID,
             credentials_info=credentials_info,
         )
-    return load_spravochnik(streamlit_secrets=st.secrets)
+    return _cached_load_spravochnik(
+        use_google_secrets=False,
+        sheets_id=None,
+        credentials_info=None,
+    )
 
 
 try:
@@ -481,6 +533,7 @@ except Exception as exc:
     spravochnik = None
 
 purchase_result = None
+purchases_prepared = st.session_state.purchases_prepared
 processing_error: str | None = None
 selected_week_label: str | None = None
 
@@ -508,20 +561,24 @@ if uploaded_purchases is not None:
             raise ValueError("Справочник не загружен. Проверьте Google Sheets или файл spravochnik.xlsx.")
 
         validate_file(uploaded_purchases)
-        purchase_result = process_excel(uploaded_purchases)
-
         file_key = f"{uploaded_purchases.name}:{uploaded_purchases.size}"
-        _, detected_week, _ = detect_actual_week(purchase_result["data"])
-        detected_label = format_week_label(detected_week)
 
+        # Парсим Excel и готовим данные только при смене файла.
         if st.session_state.get("loaded_file_key") != file_key:
+            purchase_result = process_excel(uploaded_purchases)
+            purchases_prepared = prepare_purchases(purchase_result["data"])
+            _, detected_week, _ = detect_actual_week(purchases_prepared)
+            detected_label = format_week_label(detected_week)
+
             st.session_state.loaded_file_key = file_key
+            st.session_state.purchases_raw = purchase_result["data"]
+            st.session_state.purchases_prepared = purchases_prepared
             st.session_state.actual_week_select = detected_label
-            st.session_state.analysis_started = False
+            _reset_analysis()
 
             if spravochnik.get("writable"):
                 unknowns = find_unknown_products(
-                    purchase_result["data"],
+                    purchases_prepared,
                     spravochnik.get("volumes", {}),
                     spravochnik.get("excluded", []),
                 )
@@ -530,13 +587,31 @@ if uploaded_purchases is not None:
             else:
                 st.session_state.pending_new_products = []
                 st.session_state.pending_new_products_total = 0
+        else:
+            purchases_prepared = st.session_state.purchases_prepared
+            purchase_result = {
+                "data": st.session_state.purchases_raw,
+                "row_count": len(st.session_state.purchases_raw)
+                if st.session_state.purchases_raw is not None
+                else 0,
+            }
     except Exception as exc:
         processing_error = str(exc)
+        _clear_purchase_cache()
+        purchases_prepared = None
+        purchase_result = None
+elif st.session_state.get("loaded_file_key"):
+    # Файл убрали из uploader — очищаем кэш.
+    _clear_purchase_cache()
+    st.session_state.loaded_file_key = None
+    st.session_state.pending_new_products = []
+    st.session_state.pending_new_products_total = 0
+    purchases_prepared = None
 
 has_pending_products = bool(st.session_state.get("pending_new_products"))
 if (
     has_pending_products
-    and purchase_result is not None
+    and purchases_prepared is not None
     and processing_error is None
     and spravochnik is not None
 ):
@@ -549,10 +624,10 @@ with week_col:
     )
     with st.container(border=True):
         st.markdown('<span class="control-panel week-control-panel"></span>', unsafe_allow_html=True)
-        if purchase_result is not None and processing_error is None:
+        if purchases_prepared is not None and processing_error is None and spravochnik is not None:
             default_label = st.session_state.get(
                 "actual_week_select",
-                format_week_label(detect_actual_week(purchase_result["data"])[1]),
+                format_week_label(detect_actual_week(purchases_prepared)[1]),
             )
             default_index = (
                 WEEK_SELECTOR_OPTIONS.index(default_label)
@@ -576,7 +651,8 @@ with week_col:
                 )
             with week_meta_col:
                 actual_week = parse_selected_week(selected_week_label)
-                cycle_number = get_cycle_number(spravochnik["cycles"], actual_week)
+                cycles_source = spravochnik.get("cycles_normalized", spravochnik["cycles"])
+                cycle_number = get_cycle_number(cycles_source, actual_week)
                 cycle_text = format_cycle_message(cycle_number)
                 st.markdown(
                     f'<div class="actual-week-meta-block">'
@@ -591,7 +667,7 @@ with week_col:
             )
 
         can_start = (
-            purchase_result is not None
+            purchases_prepared is not None
             and processing_error is None
             and spravochnik is not None
             and selected_week_label is not None
@@ -610,23 +686,31 @@ with week_col:
         ):
             st.session_state.analysis_started = True
 
-metrics_tables = None
+metrics_tables = st.session_state.metrics_tables
 if (
     st.session_state.analysis_started
-    and purchase_result is not None
+    and purchases_prepared is not None
     and processing_error is None
     and selected_week_label is not None
     and spravochnik is not None
 ):
     actual_week = parse_selected_week(selected_week_label)
-    metrics_by_volume = calculate_all_volume_metrics(
-        purchase_result["data"],
-        spravochnik,
-        actual_week,
-    )
-    metrics_tables = build_all_metrics_tables(spravochnik, metrics_by_volume)
+    cache_key = f"{st.session_state.get('loaded_file_key')}:{actual_week}"
+    if st.session_state.metrics_cache_key != cache_key or metrics_tables is None:
+        metrics_by_volume = calculate_all_volume_metrics(
+            purchases_prepared,
+            spravochnik,
+            actual_week,
+        )
+        metrics_tables = build_all_metrics_tables(spravochnik, metrics_by_volume)
+        st.session_state.metrics_tables = metrics_tables
+        st.session_state.metrics_cache_key = cache_key
+        st.session_state.excel_report_bytes = export_report_to_excel(metrics_tables)
+    else:
+        metrics_tables = st.session_state.metrics_tables
 
 can_download_excel = metrics_tables is not None
+excel_bytes = st.session_state.excel_report_bytes or b""
 with excel_download_slot.container():
     st.markdown(
         '<span id="excel-download-marker" style="display:none;"></span>',
@@ -634,7 +718,7 @@ with excel_download_slot.container():
     )
     st.download_button(
         "Скачать отчёт в эксель",
-        data=export_report_to_excel(metrics_tables) if can_download_excel else b"",
+        data=excel_bytes if can_download_excel else b"",
         file_name=build_excel_filename(selected_week_label) if can_download_excel else "report.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,

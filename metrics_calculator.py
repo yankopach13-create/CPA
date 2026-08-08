@@ -4,7 +4,7 @@ from typing import Any
 
 import pandas as pd
 
-from processor import get_cycle_weeks, get_return_weeks
+from processor import get_cycle_weeks, get_return_weeks, normalize_cycles_df
 from purchases import filter_by_models, prepare_purchases
 
 WEEK_53_PLUS_1 = 54
@@ -97,43 +97,53 @@ def _week_slice(purchases: pd.DataFrame, year_week: tuple[int, int]) -> pd.DataF
 
 def _filter_weeks(purchases: pd.DataFrame, weeks: list[tuple[int, int]]) -> pd.DataFrame:
     if not weeks:
-        return purchases.iloc[0:0].copy()
+        return purchases.iloc[0:0]
     week_index = pd.MultiIndex.from_tuples(weeks, names=["year", "week"])
     keys = pd.MultiIndex.from_frame(purchases[["year", "week"]])
     return purchases[keys.isin(week_index)]
 
 
 def _client_codes(frame: pd.DataFrame) -> set[str]:
-    return {
-        str(code).strip()
-        for code in frame.loc[frame["has_bc"], "client_code"]
-        if str(code).strip()
-    }
+    if frame.empty:
+        return set()
+    codes = frame.loc[frame["has_bc"], "client_code"].astype("string").str.strip()
+    codes = codes[codes.ne("") & codes.notna()]
+    return set(codes.unique())
 
 
 def calculate_current_week_metrics(
     purchases: pd.DataFrame,
     actual_week: int,
     return_weeks: int | None = None,
+    *,
+    all_weeks: list[tuple[int, int]] | None = None,
+    current_year_week: tuple[int, int] | None = None,
 ) -> dict[str, float | int | None]:
     """Считает метрики за выбранную актуальную неделю."""
     metrics = _empty_metrics()
     if purchases.empty:
         return metrics
 
-    all_weeks = _sorted_weeks(purchases)
-    if not all_weeks:
+    weeks = all_weeks if all_weeks is not None else _sorted_weeks(purchases)
+    if not weeks:
         return metrics
 
-    current_year_week = _resolve_actual_year_week(purchases, actual_week)
-    if current_year_week is None:
+    resolved_week = (
+        current_year_week
+        if current_year_week is not None
+        else _resolve_actual_year_week(purchases, actual_week)
+    )
+    if resolved_week is None:
         return metrics
 
     lookback_weeks = max(0, return_weeks - 1) if return_weeks else 0
-    week_index = all_weeks.index(current_year_week)
-    prior_weeks = all_weeks[max(0, week_index - lookback_weeks) : week_index]
+    try:
+        week_index = weeks.index(resolved_week)
+    except ValueError:
+        return metrics
+    prior_weeks = weeks[max(0, week_index - lookback_weeks) : week_index]
 
-    current = _week_slice(purchases, current_year_week)
+    current = _week_slice(purchases, resolved_week)
     prior = _filter_weeks(purchases, prior_weeks)
 
     total_qty = float(current["quantity"].sum())
@@ -187,40 +197,77 @@ def calculate_volume_metrics(
     cycles_df: pd.DataFrame,
     category_name: str,
     return_weeks_map: dict[str, int],
+    *,
+    cycle_weeks: list[int] | None = None,
 ) -> dict[str, Any]:
     """Считает метрики по категории и по моделям детализации."""
     category_models = volume_config.get("category", [])
     detail_models = volume_config.get("detail", [])
-    cycle_weeks = get_cycle_weeks(cycles_df, actual_week)
+    resolved_cycle_weeks = (
+        cycle_weeks if cycle_weeks is not None else get_cycle_weeks(cycles_df, actual_week)
+    )
     category_return_weeks = get_return_weeks(return_weeks_map, category_name)
 
     category_purchases = filter_by_models(purchases, category_models)
+    all_weeks = _sorted_weeks(category_purchases) if not category_purchases.empty else []
+    current_year_week = (
+        _resolve_actual_year_week(category_purchases, actual_week)
+        if not category_purchases.empty
+        else None
+    )
+
     result: dict[str, Any] = {
         "aggregate": {
             "current_week": calculate_current_week_metrics(
                 category_purchases,
                 actual_week,
                 category_return_weeks,
+                all_weeks=all_weeks,
+                current_year_week=current_year_week,
             ),
-            "cycle": calculate_cycle_metrics(category_purchases, cycle_weeks),
+            "cycle": calculate_cycle_metrics(category_purchases, resolved_cycle_weeks),
         },
         "detail": {},
     }
 
+    if not detail_models:
+        return result
+
+    detail_set = {model.strip() for model in detail_models}
+    detail_purchases = purchases[purchases["model"].isin(detail_set)]
+    grouped = (
+        detail_purchases.groupby("model", sort=False)
+        if not detail_purchases.empty
+        else None
+    )
+
     for model in detail_models:
-        model_purchases = filter_by_models(purchases, [model])
+        model_key = model.strip()
+        model_purchases = (
+            grouped.get_group(model_key)
+            if grouped is not None and model_key in grouped.groups
+            else purchases.iloc[0:0]
+        )
         detail_return_weeks = get_return_weeks(
             return_weeks_map,
             category_name,
             detail_name=model,
+        )
+        model_weeks = _sorted_weeks(model_purchases) if not model_purchases.empty else []
+        model_current_week = (
+            _resolve_actual_year_week(model_purchases, actual_week)
+            if not model_purchases.empty
+            else None
         )
         result["detail"][model] = {
             "current_week": calculate_current_week_metrics(
                 model_purchases,
                 actual_week,
                 detail_return_weeks,
+                all_weeks=model_weeks,
+                current_year_week=model_current_week,
             ),
-            "cycle": calculate_cycle_metrics(model_purchases, cycle_weeks),
+            "cycle": calculate_cycle_metrics(model_purchases, resolved_cycle_weeks),
         }
 
     return result
@@ -234,8 +281,11 @@ def calculate_all_volume_metrics(
     """Считает метрики для всех категорий из справочника."""
     purchases = prepare_purchases(purchases_df)
     volumes = spravochnik.get("volumes", {})
-    cycles_df = spravochnik.get("cycles")
+    cycles_df = spravochnik.get("cycles_normalized")
+    if cycles_df is None:
+        cycles_df = normalize_cycles_df(spravochnik.get("cycles"))
     return_weeks_map = spravochnik.get("return_weeks", {})
+    cycle_weeks = get_cycle_weeks(cycles_df, actual_week)
 
     return {
         volume: calculate_volume_metrics(
@@ -245,6 +295,7 @@ def calculate_all_volume_metrics(
             cycles_df,
             volume,
             return_weeks_map,
+            cycle_weeks=cycle_weeks,
         )
         for volume, config in volumes.items()
         if config.get("category")

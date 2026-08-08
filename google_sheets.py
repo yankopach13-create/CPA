@@ -16,6 +16,7 @@ from processor import (
     SHEET_EXCLUDED,
     SHEET_RETURN,
     _pick_sheet,
+    normalize_cycles_df,
     parse_display_volumes,
     parse_excluded_products,
     parse_return_weeks,
@@ -182,15 +183,36 @@ def _append_value_to_column(
     raw: list[list[str]],
     col_index: int,
     value: str,
-) -> None:
-    """Пишет value в первую пустую ячейку столбца (с строки 3), если его ещё нет."""
+) -> list[dict[str, Any]] | None:
+    """
+    Готовит batch-update для записи value в первую пустую ячейку столбца.
+
+    Возвращает список запросов для batch_update или None, если значение уже есть.
+    """
     col_letter = _col_index_to_a1(col_index)
     column_values = [row[col_index] if col_index < len(row) else "" for row in raw]
     existing = {str(cell).strip() for cell in column_values[2:] if str(cell).strip()}
     if value in existing:
-        return
+        return None
     row_number = _first_empty_row(column_values, start_row_1based=3)
-    worksheet.update_acell(f"{col_letter}{row_number}", value)
+    # Помечаем ячейку в raw, чтобы следующий вызов видел занятость.
+    while len(raw) < row_number:
+        raw.append([])
+    row = raw[row_number - 1]
+    while len(row) <= col_index:
+        row.append("")
+    row[col_index] = value
+    return [{"range": f"{col_letter}{row_number}", "values": [[value]]}]
+
+
+def _batch_update_cells(
+    worksheet: gspread.Worksheet,
+    updates: list[dict[str, Any]],
+) -> None:
+    """Отправляет несколько обновлений ячеек одним запросом."""
+    if not updates:
+        return
+    worksheet.batch_update(updates, value_input_option="USER_ENTERED")
 
 
 def _get_or_create_excluded_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
@@ -268,16 +290,19 @@ def add_product_to_category(
         header_top, header_bottom, category_name
     )
 
-    _append_value_to_column(worksheet, raw, category_idx, model)
+    updates: list[dict[str, Any]] = []
+    category_update = _append_value_to_column(worksheet, raw, category_idx, model)
+    if category_update:
+        updates.extend(category_update)
     if add_to_detail:
         if detail_idx is None:
             raise ValueError(
                 f"У категории «{category_name}» нет столбца «Детализация»."
             )
-        # Перечитываем после возможного изменения длины строк не требуется —
-        # _append_value_to_column смотрит свой столбец в исходном raw.
-        raw = worksheet.get_all_values()
-        _append_value_to_column(worksheet, raw, detail_idx, model)
+        detail_update = _append_value_to_column(worksheet, raw, detail_idx, model)
+        if detail_update:
+            updates.extend(detail_update)
+    _batch_update_cells(worksheet, updates)
 
 
 def create_category_with_product(
@@ -322,17 +347,20 @@ def create_category_with_product(
         [
             [name, name],
             [LIST_CATEGORY, LIST_DETAIL],
+            [model, model if add_to_detail else ""],
         ],
-        f"{cat_letter}1:{detail_letter}2",
+        f"{cat_letter}1:{detail_letter}3",
     )
-    display_ws.update_acell(f"{cat_letter}3", model)
-    if add_to_detail:
-        display_ws.update_acell(f"{detail_letter}3", model)
 
     return_ws = spreadsheet.worksheet(SHEET_RETURN)
     cat_col, weeks_col, next_row = _find_return_columns(return_ws)
-    return_ws.update_acell(f"{cat_col}{next_row}", name)
-    return_ws.update_acell(f"{weeks_col}{next_row}", return_weeks)
+    return_ws.batch_update(
+        [
+            {"range": f"{cat_col}{next_row}", "values": [[name]]},
+            {"range": f"{weeks_col}{next_row}", "values": [[return_weeks]]},
+        ],
+        value_input_option="USER_ENTERED",
+    )
 
 
 def add_excluded_product(
@@ -370,14 +398,24 @@ def add_excluded_product(
 
     next_row = len(raw) + 1
     model_letter = _col_index_to_a1(model_idx)
-    worksheet.update_acell(f"{model_letter}{next_row}", model)
+    updates: list[dict[str, Any]] = [
+        {"range": f"{model_letter}{next_row}", "values": [[model]]},
+    ]
     if len(header) > 1:
-        worksheet.update_acell(f"{_col_index_to_a1(1)}{next_row}", date.today().isoformat())
-    if len(header) > 2:
-        worksheet.update_acell(
-            f"{_col_index_to_a1(2)}{next_row}",
-            "пропущен пользователем",
+        updates.append(
+            {
+                "range": f"{_col_index_to_a1(1)}{next_row}",
+                "values": [[date.today().isoformat()]],
+            }
         )
+    if len(header) > 2:
+        updates.append(
+            {
+                "range": f"{_col_index_to_a1(2)}{next_row}",
+                "values": [["пропущен пользователем"]],
+            }
+        )
+    _batch_update_cells(worksheet, updates)
 
 
 def load_spravochnik_from_sheets(
@@ -409,11 +447,13 @@ def load_spravochnik_from_sheets(
     volumes = parse_display_volumes(display_df)
     return_weeks = parse_return_weeks(return_df)
     excluded = parse_excluded_products(excluded_df)
+    cycles_normalized = normalize_cycles_df(cycles_df)
 
     return {
         "path": f"google-sheets:{sheets_id}",
         "display": display_df,
         "cycles": cycles_df,
+        "cycles_normalized": cycles_normalized,
         "return": return_df,
         "return_weeks": return_weeks,
         "volumes": volumes,
