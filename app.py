@@ -1,6 +1,6 @@
 """Streamlit-приложение для анализа клиентов в продукте."""
 
-import html
+from pathlib import Path
 
 import streamlit as st
 
@@ -38,7 +38,13 @@ from processor import (
 
 # TTL кэша справочника (секунды). После записи продуктов кэш сбрасывается явно.
 SPRAVOCHNIK_CACHE_TTL = 300
-
+PROJECT_DIR = Path(__file__).resolve().parent
+UPLOAD_HINT_IMAGE_CANDIDATES = (
+    PROJECT_DIR / "assets" / "upload_hint.png",
+    PROJECT_DIR / "assets" / "upload_hint.jpg",
+    PROJECT_DIR / "assets" / "upload_hint.jpeg",
+    PROJECT_DIR / "assets" / "upload_hint.webp",
+)
 
 st.set_page_config(
     page_title="Анализ клиентов в продукте",
@@ -52,14 +58,25 @@ UPLOAD_HINT_TEXT = (
 )
 
 
-def _upload_hint_html() -> str:
-    hint_text = html.escape(UPLOAD_HINT_TEXT).replace("\n", "<br>")
-    return (
-        f'<div class="upload-hint-wrap" id="upload-hint-marker">'
-        f'<span class="upload-hint-label">ℹ️ Подсказка по загрузке файла</span>'
-        f'<span class="upload-hint-tooltip">{hint_text}</span>'
-        "</div>"
-    )
+def _resolve_upload_hint_image() -> Path | None:
+    """Возвращает путь к скриншоту подсказки, если файл лежит в assets/."""
+    for path in UPLOAD_HINT_IMAGE_CANDIDATES:
+        if path.is_file():
+            return path
+    return None
+
+
+def _render_upload_hint() -> None:
+    """Показывает подсказку по загрузке файла (текст + опциональный скриншот)."""
+    with st.popover("ℹ️ Подсказка по загрузке файла", use_container_width=False):
+        st.markdown(UPLOAD_HINT_TEXT)
+        hint_image = _resolve_upload_hint_image()
+        if hint_image is not None:
+            st.image(
+                str(hint_image),
+                use_container_width=True,
+                caption="Пример нужного файла / экрана выгрузки",
+            )
 
 
 st.title("🛒 👤 Анализ клиентов в продукте")
@@ -72,7 +89,7 @@ st.markdown(
     "</a></p>",
     unsafe_allow_html=True,
 )
-st.markdown(_upload_hint_html(), unsafe_allow_html=True)
+_render_upload_hint()
 
 st.markdown(
     """
@@ -97,47 +114,22 @@ st.markdown(
         display: flex;
         align-items: flex-end;
     }
-    .upload-hint-wrap {
-        position: relative;
-        display: inline-block;
-        margin: 0 0 0.35rem 0;
+    /* Кнопка-подсказка: выглядит как текстовая ссылка, не как primary CTA */
+    div[data-testid="stPopover"] > button {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        color: #4b5563 !important;
+        font-size: 0.9rem !important;
+        font-weight: 500 !important;
+        padding: 0.15rem 0.25rem !important;
+        min-height: auto !important;
+        border-bottom: 1px dotted #9ca3af !important;
+        border-radius: 0 !important;
     }
-    .upload-hint-label {
-        font-size: 0.9rem;
-        font-weight: 500;
-        color: #4b5563;
-        cursor: help;
-        border-bottom: 1px dotted #9ca3af;
-        line-height: 1.3;
-    }
-    .upload-hint-tooltip {
-        visibility: hidden;
-        opacity: 0;
-        position: absolute;
-        left: 0;
-        top: calc(100% + 4px);
-        z-index: 1000;
-        min-width: 260px;
-        max-width: 420px;
-        padding: 0.6rem 0.8rem;
-        background: #1f2937;
-        color: #f9fafb;
-        font-size: 0.86rem;
-        font-weight: 400;
-        line-height: 1.45;
-        border-radius: 6px;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-        transition: opacity 0.12s ease;
-        white-space: normal;
-        pointer-events: none;
-    }
-    .upload-hint-wrap:hover .upload-hint-tooltip {
-        visibility: visible;
-        opacity: 1;
-    }
-    div[data-testid="stVerticalBlock"]:has(#upload-hint-marker) {
-        margin-bottom: 0 !important;
-        padding-bottom: 0 !important;
+    div[data-testid="stPopover"] > button:hover {
+        color: #111827 !important;
+        border-bottom-color: #6b7280 !important;
     }
     div[data-testid="stVerticalBlock"]:has(#top-controls-row) {
         margin-top: 0 !important;
