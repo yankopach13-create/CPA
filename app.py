@@ -655,7 +655,7 @@ elif metrics_tables is not None:
     table_items = list(metrics_tables.items())
     for row_start in range(0, len(table_items), 3):
         row_items = table_items[row_start : row_start + 3]
-        columns = st.columns(3)
+        columns = st.columns(len(row_items))
         for column, (category_name, table) in zip(columns, row_items, strict=True):
             with column:
                 st.markdown(f"**{category_name}**")
