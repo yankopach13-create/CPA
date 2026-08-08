@@ -412,7 +412,7 @@ def add_excluded_product(
         updates.append(
             {
                 "range": f"{_col_index_to_a1(2)}{next_row}",
-                "values": [["пропущен пользователем"]],
+                "values": [["исключён пользователем"]],
             }
         )
     _batch_update_cells(worksheet, updates)

@@ -28,6 +28,7 @@ from spravochnik_config import (
     has_google_secrets_config,
 )
 from processor import (
+    CATEGORY_PLACEHOLDER,
     NEW_CATEGORY_OPTION,
     get_cycle_number,
     load_spravochnik,
@@ -396,12 +397,14 @@ def _new_product_dialog(spravochnik: dict) -> None:
     st.caption(f"Осталось обработать: {remaining} из {total}")
 
     categories = list(spravochnik.get("volumes", {}).keys())
-    options = [*categories, NEW_CATEGORY_OPTION]
+    options = [CATEGORY_PLACEHOLDER, *categories, NEW_CATEGORY_OPTION]
     selected = st.selectbox(
         "Отнесите продукт в категорию",
         options,
+        index=0,
         key=f"new_prod_category_{product_key}",
     )
+    category_selected = selected != CATEGORY_PLACEHOLDER
 
     new_category_name = ""
     return_weeks_value = 4
@@ -431,7 +434,7 @@ def _new_product_dialog(spravochnik: dict) -> None:
     )
 
     error_slot = st.empty()
-    save_col, skip_col = st.columns(2)
+    save_col, exclude_col = st.columns(2)
 
     def _finish_current() -> None:
         pending.pop(0)
@@ -442,6 +445,9 @@ def _new_product_dialog(spravochnik: dict) -> None:
     with save_col:
         if st.button("Сохранить", type="primary", use_container_width=True):
             try:
+                if not category_selected:
+                    raise ValueError("Не выбрана категория")
+
                 sheets_id, credentials_path, credentials_info = _resolve_sheets_credentials(
                     spravochnik
                 )
@@ -476,8 +482,8 @@ def _new_product_dialog(spravochnik: dict) -> None:
             except Exception as exc:
                 error_slot.error(str(exc))
 
-    with skip_col:
-        if st.button("Пропустить", use_container_width=True):
+    with exclude_col:
+        if st.button("Исключить", use_container_width=True):
             try:
                 sheets_id, credentials_path, credentials_info = _resolve_sheets_credentials(
                     spravochnik

@@ -15,6 +15,7 @@ SHEET_EXCLUDED = "Исключённые"
 LIST_CATEGORY = "Категория"
 LIST_DETAIL = "Детализация"
 NEW_CATEGORY_OPTION = "Добавить новую категорию"
+CATEGORY_PLACEHOLDER = "— Выберите категорию —"
 
 
 def _pick_sheet(sheet_names: list[str], preferred_name: str, fallback_index: int) -> str:
